@@ -42,7 +42,7 @@ class Types:
     TYPE_NONE = type(None)
 
 class StoredObject:
-    __slots__ = ("variant_typed", "flushing_thread", "name", "cache_on_set", "env")
+    __slots__ = ("variant_typed", "flushing_thread", "name", "cache_on_set", "env", "set_instantly")
 
     def _flush_buffer(self):
         pass
@@ -65,11 +65,14 @@ class StoredObject:
         else:
             self._flush_buffer()
 
-    def __init__(self, variant_typed=False, name="", env=env, cache_on_set=True):
+    def __init__(self, variant_typed=False, name="", env=env, cache_on_set=True, set_instantly=False, batch_writes=0):
         assert name, "Name must be a non-empty string"
         self.env = env
         self.cache_on_set = cache_on_set
         self.variant_typed = variant_typed
+        self.set_instantly = set_instantly
+        self.batch_writes = bool(batch_writes)
+        self.batch_size = batch_writes
         self.flushing_thread = None
 
     @staticmethod
@@ -101,7 +104,6 @@ class StoredObject:
             case _:
                 raise ValueError(f"unknown typecode: {chr(code)}")
 
-
 class StoredList(StoredObject):
     # LMDB-backed list with in-memory buffer and cache.
     # Only strings are supported, as only they were
@@ -117,9 +119,11 @@ class StoredList(StoredObject):
         self._db = env.open_db(name.encode("ascii"), create=True)
         with self.env.begin(db=self._db) as txn:
             self._persisted_len = txn.stat(db=self._db)["entries"]
-        self._buffer = []  # pending items to flush_buffer
+        self._buffer = []  # pending appends to flush_buffer
         self._buf_limit = buffer_size
         self._cache = {}  # in-memory read cache
+        self._index_buffer = {}
+        self.push_stack = [b"", b"", b""]
 
     def append(self, value: str) -> None:
         # add item to buffer and flush_buffer if limit reached
@@ -129,21 +133,52 @@ class StoredList(StoredObject):
         if self._buf_limit and len(self._buffer) >= self._buf_limit:
             self.flush_buffer()
 
+    _length_struct = struct.Struct(">I")
+    _unpack = struct.Struct(">I").unpack_from
+    def _puts_gen_batched(self):
+        # pre-get values for better perfomance
+        idx = self._persisted_len
+        cell = self.batch_size
+        prev_page = idx // cell
+        buf = bytearray()
+        pack_len = StoredList._length_struct.pack
+        int_pack = StoredList.int_pack
+
+        for v in self._buffer:
+            b = v if not self.variant_typed else StoredObject.encode_val(v)
+            buf.extend(pack_len(len(b)))
+            buf.extend(b)
+
+            idx += 1
+            page = idx // cell
+            # batch every N elements (N=cell)
+            if page != prev_page:
+                yield (int_pack(prev_page), memoryview(buf))
+                buf.clear()
+                prev_page = page
+
+        # yield leftover buf
+        if buf:
+            yield (int_pack(prev_page), memoryview(buf))
+
+    def _puts_gen_single(self):
+        idx = self._persisted_len
+        for v in self._buffer:
+            yield (StoredList.int_pack(idx), v if not self.variant_typed else StoredObject.encode_val(v))
+            idx += 1
+
+
+
     def _flush_buffer(self) -> None:
         # write buffered items to lmdb
         if not self._buffer:
             return
 
-        with self.env.begin(write=True, db=self._db) as txn:
-            idx = self._persisted_len
-            stack = b""
-            for v in self._buffer:
-                key = StoredList.int_pack(idx)
-                stack += StoredObject.encode_val(v) if self.variant_typed else v
-                txn.put(key, stack,
-                        append=True)  # , flags=txn.)
-                idx += 1
-        self._persisted_len = idx
+        total = len(self._buffer) + self._persisted_len
+        with self.env.begin(write=True, db=self._db, buffers=True) as txn:
+            cursor = txn.cursor()
+            cursor.putmulti(append=True, items=self._puts_gen_batched() if self.batch_writes else self._puts_gen_single())
+        self._persisted_len = total
         self._buffer.clear()
 
     def __len__(self) -> int:
@@ -181,12 +216,15 @@ class StoredList(StoredObject):
             # if in active buffer space, write into it
             self._buffer[index - self._persisted_len] = value
         else:
-            if index in self._cache and self._cache[index] == value:
-                return
             # otherwise, put into db
-            with self.env.begin(write=True, db=self._db) as txn:
-                txn.put(StoredList.int_pack(idx),
-                        StoredObject.encode_val(value) if self.variant_typed else value)
+            if self.set_instantly:
+                if index in self._cache and self._cache[index] == value:
+                    return
+                with self.env.begin(write=True, db=self._db) as txn:
+                    txn.put(StoredList.int_pack(idx),
+                            StoredObject.encode_val(value) if self.variant_typed else value)
+            else:
+                self._index_buffer[index] = value
         if self.cache_on_set:
             self._cache[index] = value
 
