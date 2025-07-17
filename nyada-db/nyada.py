@@ -41,6 +41,7 @@ class Types:
     TYPE_BYTES = bytes
     TYPE_NONE = type(None)
 
+from math import log2
 class StoredObject:
     __slots__ = ("variant_typed", "flushing_thread", "name", "cache_on_set", "env", "set_instantly")
 
@@ -65,15 +66,46 @@ class StoredObject:
         else:
             self._flush_buffer()
 
-    def __init__(self, variant_typed=False, name="", env=env, cache_on_set=True, set_instantly=False, batch_writes=0):
+    @staticmethod
+    def get_struct_format(n):
+        # U min/max for 1, 2, 4, 8 bytes
+        struct_types = {0: ">B", 1: ">B", 2: ">H", 4: ">L", 8: ">Q"}
+        keys = list(struct_types.keys())
+        for i in range(1, len(struct_types)):
+            if keys[i]-1 <= n <= keys[i]:
+                return struct_types[keys[i]]
+        raise OverflowError("number too large for 8 bytes unsigned")
+
+    def __init__(self,
+                 variant_typed=False,  # will automatically encode types into bytes if True
+                 name="",              # db name
+                 env=env,              # dbs personal env (if not set, will use global env)
+                 cache_on_set=True,    # auto cache on __setitem__ calls at cost of perfomance
+                 set_instantly=False,  # will instantly do a PUT requests on set instead of writing to
+                                       # in-memory buffer
+                 max_length=0,         # maximal element length (for batch writes)
+                 batch_writes=0,       # will put multiple values under same key for fewer PUT requests
+                 constant_length=False # if True, and batching is enabled, will significantly speed it up,
+                                       # with an assumption that length of every byte string is same
+                 ):
         assert name, "Name must be a non-empty string"
         self.env = env
         self.cache_on_set = cache_on_set
         self.variant_typed = variant_typed
         self.set_instantly = set_instantly
-        self.batch_writes = bool(batch_writes)
+        self.do_batch_writes = bool(batch_writes)
         self.batch_size = batch_writes
         self.flushing_thread = None
+
+        self.byte_length = (max_length.bit_length() + 7) // 8
+        print(self.byte_length)
+        self.HEADER_SLOT_COUNT = batch_writes + 1 # N items + final end-offset
+        self.HEADER_BYTE_COUNT = self.HEADER_SLOT_COUNT * self.byte_length  # 1 short = 2 bytes
+        struct_type = StoredObject.get_struct_format(self.byte_length)
+        print(struct_type)
+        self.struct_pack_into = struct.Struct(struct_type).pack_into # unsigned big-endian short
+        self.struct_unpack_from = struct.Struct(struct_type).unpack_from
+
 
     @staticmethod
     def encode_val(value) -> bytes:
@@ -106,8 +138,6 @@ class StoredObject:
 
 class StoredList(StoredObject):
     # LMDB-backed list with in-memory buffer and cache.
-    # Only strings are supported, as only they were
-    # used as list data type in this project.
     # Append-only.
 
     int_pack = lambda index: struct.pack(">Q", index)
@@ -123,47 +153,71 @@ class StoredList(StoredObject):
         self._buf_limit = buffer_size
         self._cache = {}  # in-memory read cache
         self._index_buffer = {}
-        self.push_stack = [b"", b"", b""]
+        self.append = self._buffer.append
 
-    def append(self, value: str) -> None:
-        # add item to buffer and flush_buffer if limit reached
-        self._buffer.append(value)
-        if self.cache_on_set:
-            self._cache[idx] = v
-        if self._buf_limit and len(self._buffer) >= self._buf_limit:
-            self.flush_buffer()
+    # def append(self, value: str) -> None:
+    #     # add item to buffer and flush_buffer if limit reached
+    #     self._buffer.append(value)
+    #     if self.cache_on_set:
+    #         self._cache[idx] = v
+    #     if self._buf_limit and len(self._buffer) >= self._buf_limit:
+    #         self.flush_buffer()
 
-    _length_struct = struct.Struct(">I")
-    _unpack = struct.Struct(">I").unpack_from
     def _puts_gen_batched(self):
-        # pre-get values for better perfomance
-        idx = self._persisted_len
-        cell = self.batch_size
-        prev_page = idx // cell
-        buf = bytearray()
-        pack_len = StoredList._length_struct.pack
+        pack_into = self.struct_pack_into
         int_pack = StoredList.int_pack
+        batch_size = self.batch_size
+        header_bytes = self.HEADER_BYTE_COUNT
+        byte_len = self.byte_length
+
+        idx = self._persisted_len
+        page = idx // batch_size
+        boundary = (page + 1) * batch_size
+
+        header = bytearray(header_bytes)  # zero-filled
+        body = bytearray()
+        running = 0
 
         for v in self._buffer:
-            b = v if not self.variant_typed else StoredObject.encode_val(v)
-            buf.extend(pack_len(len(b)))
-            buf.extend(b)
+            if self.cache_on_set:
+                self._cache[idx] = v
+            # did we cross into the next batch?
+            if idx >= boundary:
+                # write the final end-offset for the previous page
+                slot_idx = (idx - 1) % batch_size
+                pack_into(header, byte_len * (slot_idx + 1), running)
+                # emit it
+                yield (int_pack(page), memoryview(header + body))
+
+                # start next page
+                page = idx // batch_size
+                boundary = (page + 1) * batch_size
+                header = bytearray(header_bytes)
+                body = bytearray()
+                running = 0
+
+            # record start-offset of this slot
+            slot = idx % batch_size
+            pack_into(header, byte_len * slot, running)
+
+            # append the data
+            b = v
+            body.extend(b)
+            running += len(b)
 
             idx += 1
-            page = idx // cell
-            # batch every N elements (N=cell)
-            if page != prev_page:
-                yield (int_pack(prev_page), memoryview(buf))
-                buf.clear()
-                prev_page = page
 
-        # yield leftover buf
-        if buf:
-            yield (int_pack(prev_page), memoryview(buf))
+        # flush the last (partial) page
+        if running or body:
+            slot_idx = (idx - 1) % batch_size
+            pack_into(header, byte_len * (slot_idx + 1), running)
+            yield (int_pack(page), memoryview(header + body))
 
     def _puts_gen_single(self):
         idx = self._persisted_len
         for v in self._buffer:
+            if self.cache_on_set:
+                self._cache[idx] = v
             yield (StoredList.int_pack(idx), v if not self.variant_typed else StoredObject.encode_val(v))
             idx += 1
 
@@ -177,7 +231,7 @@ class StoredList(StoredObject):
         total = len(self._buffer) + self._persisted_len
         with self.env.begin(write=True, db=self._db, buffers=True) as txn:
             cursor = txn.cursor()
-            cursor.putmulti(append=True, items=self._puts_gen_batched() if self.batch_writes else self._puts_gen_single())
+            cursor.putmulti(append=True, items=self._puts_gen_batched() if self.do_batch_writes else self._puts_gen_single())
         self._persisted_len = total
         self._buffer.clear()
 
@@ -196,8 +250,35 @@ class StoredList(StoredObject):
             return self._cache[index]
         if index >= self._persisted_len:
             return self._buffer[index - self._persisted_len]
-        with self.env.begin(db=self._db, write=False) as txn:
-            data = txn.get(StoredList.int_pack(index))
+
+        if self.do_batch_writes:
+            # figure page and slot
+            page, slot = divmod(index, self.batch_size)
+            key = StoredList.int_pack(page)
+        else:
+            # no expensive divmod
+            key = StoredList.int_pack(index)
+
+        # fetch the packed page
+        with env.begin(db=self._db, write=False, buffers=True) as txn:
+            blob = txn.get(key)
+        if blob is None:
+            raise IndexError(f"{index} out of range")
+
+        if not self.do_batch_writes:
+            return StoredObject.decode_val(blob) if self.variant_typed else blob
+
+        if blob is None:
+            raise IndexError(f"{index} out of range")
+
+        mv = memoryview(blob)
+        # read start/end offsets directly from header
+        start = self.struct_unpack_from(mv, self.byte_length * slot)[0]
+        end = self.struct_unpack_from(mv, self.byte_length * (slot + 1))[0]
+
+        # slice out the data and decode
+        data = mv[self.HEADER_BYTE_COUNT + start: self.HEADER_BYTE_COUNT + end]
+
         if data is None:
             raise ValueError("db corrupted")
         result = StoredObject.decode_val(data) if self.variant_typed else data
