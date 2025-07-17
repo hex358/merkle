@@ -41,9 +41,37 @@ class Types:
     TYPE_BYTES = bytes
     TYPE_NONE = type(None)
 
+
+def encode_val(value) -> bytes:
+    match type(value):
+        case Types.TYPE_STR:
+            return b's' + value.encode('ascii')
+        case Types.TYPE_INT:
+            return b'i' + str(value).encode('ascii')
+        case Types.TYPE_BYTES:
+            return b'b' + value
+        case Types.TYPE_NONE:
+            return b'n'
+        case _:
+            raise TypeError(f"unsupported type: {type(value)}")
+
+def decode_val(data: bytes):
+    code, payload = data[0], data[1:]
+    match code:
+        case 115:   # ord('s')
+            return payload.decode('ascii')
+        case 105:   # ord('i')
+            return int(payload)
+        case 98:    # ord('b')
+            return payload
+        case 110:   # ord('n')
+            return None
+        case _:
+            raise ValueError(f"unknown typecode: {chr(code)}")
+
 from math import log2
 class StoredObject:
-    __slots__ = ("variant_typed", "flushing_thread", "name", "cache_on_set", "env", "set_instantly")
+    __slots__ = ("variant_typed", "flushing_thread", "name", "cache_on_set", "env")
 
     def _flush_buffer(self):
         pass
@@ -77,12 +105,9 @@ class StoredObject:
         raise OverflowError("number too large for 8 bytes unsigned")
 
     def __init__(self,
-                 variant_typed=False,  # will automatically encode types into bytes if True
                  name="",              # db name
                  env=env,              # dbs personal env (if not set, will use global env)
                  cache_on_set=True,    # auto cache on __setitem__ calls at cost of perfomance
-                 set_instantly=False,  # will instantly do a PUT requests on set instead of writing to
-                                       # in-memory buffer
                  max_length=0,         # maximal element length (for batch writes)
                  batch_writes=0,       # will put multiple values under same key for fewer PUT requests
                  constant_length=False # if True, and batching is enabled, will significantly speed it up,
@@ -91,55 +116,24 @@ class StoredObject:
         assert name, "Name must be a non-empty string"
         self.env = env
         self.cache_on_set = cache_on_set
-        self.variant_typed = variant_typed
-        self.set_instantly = set_instantly
         self.do_batch_writes = bool(batch_writes)
         self.batch_size = batch_writes
         self.flushing_thread = None
 
         self.byte_length = (max_length.bit_length() + 7) // 8
-        print(self.byte_length)
         self.HEADER_SLOT_COUNT = batch_writes + 1 # N items + final end-offset
         self.HEADER_BYTE_COUNT = self.HEADER_SLOT_COUNT * self.byte_length  # 1 short = 2 bytes
         struct_type = StoredObject.get_struct_format(self.byte_length)
-        print(struct_type)
         self.struct_pack_into = struct.Struct(struct_type).pack_into # unsigned big-endian short
         self.struct_unpack_from = struct.Struct(struct_type).unpack_from
 
 
-    @staticmethod
-    def encode_val(value) -> bytes:
-        match type(value):
-            case Types.TYPE_STR:
-                return b's' + value.encode('ascii')
-            case Types.TYPE_INT:
-                return b'i' + str(value).encode('ascii')
-            case Types.TYPE_BYTES:
-                return b'b' + value
-            case Types.TYPE_NONE:
-                return b'n'
-            case _:
-                raise TypeError(f"unsupported type: {type(value)}")
-
-    @staticmethod
-    def decode_val(data: bytes):
-        code, payload = data[0], data[1:]
-        match code:
-            case 115:   # ord('s')
-                return payload.decode('ascii')
-            case 105:   # ord('i')
-                return int(payload)
-            case 98:    # ord('b')
-                return payload
-            case 110:   # ord('n')
-                return None
-            case _:
-                raise ValueError(f"unknown typecode: {chr(code)}")
 
 class StoredList(StoredObject):
     # LMDB-backed list with in-memory buffer and cache.
     # Append-only.
 
+    LENGTH_KEY = b'__LIST_LEN__'
     int_pack = lambda index: struct.pack(">Q", index)
 
     def __init__(self, buffer_size: int = 0, **kwargs):
@@ -147,21 +141,21 @@ class StoredList(StoredObject):
         name = kwargs["name"]
         # initialize lmdb db, buffer and cache
         self._db = env.open_db(name.encode("ascii"), create=True)
+
         with self.env.begin(db=self._db) as txn:
-            self._persisted_len = txn.stat(db=self._db)["entries"]
+            raw = txn.get(StoredList.LENGTH_KEY)
+        if raw is None:
+            self._persisted_len = 0
+        else:
+            self._persisted_len = struct.unpack(">Q", raw)[0]
+            print(self._persisted_len)
+
         self._buffer = []  # pending appends to flush_buffer
         self._buf_limit = buffer_size
         self._cache = {}  # in-memory read cache
         self._index_buffer = {}
         self.append = self._buffer.append
-
-    # def append(self, value: str) -> None:
-    #     # add item to buffer and flush_buffer if limit reached
-    #     self._buffer.append(value)
-    #     if self.cache_on_set:
-    #         self._cache[idx] = v
-    #     if self._buf_limit and len(self._buffer) >= self._buf_limit:
-    #         self.flush_buffer()
+        self.buffer_batches = {}
 
     def _puts_gen_batched(self):
         pack_into = self.struct_pack_into
@@ -215,12 +209,19 @@ class StoredList(StoredObject):
 
     def _puts_gen_single(self):
         idx = self._persisted_len
-        for v in self._buffer:
-            if self.cache_on_set:
-                self._cache[idx] = v
-            yield (StoredList.int_pack(idx), v if not self.variant_typed else StoredObject.encode_val(v))
+        for v in self.buffer_batches:
+            yield (StoredList.int_pack(idx), v)
             idx += 1
 
+
+    def _sets_gen_batched(self):
+        idx = self._persisted_len
+        batches = {}
+        batch_size = self.batch_size
+        for i in self._index_buffer:
+            cell = i // batch_size
+            if not cell in batches:
+                batches[cell] = []
 
 
     def _flush_buffer(self) -> None:
@@ -232,6 +233,11 @@ class StoredList(StoredObject):
         with self.env.begin(write=True, db=self._db, buffers=True) as txn:
             cursor = txn.cursor()
             cursor.putmulti(append=True, items=self._puts_gen_batched() if self.do_batch_writes else self._puts_gen_single())
+            #print(type(cursor.getmulti(keys=[str(i).encode("ascii") for i in range(len(self._buffer))] )))
+            txn.put(
+                    StoredList.LENGTH_KEY,
+                    struct.pack(">Q", total)
+                )
         self._persisted_len = total
         self._buffer.clear()
 
@@ -262,11 +268,13 @@ class StoredList(StoredObject):
         # fetch the packed page
         with env.begin(db=self._db, write=False, buffers=True) as txn:
             blob = txn.get(key)
+            print(key)
         if blob is None:
+
             raise IndexError(f"{index} out of range")
 
         if not self.do_batch_writes:
-            return StoredObject.decode_val(blob) if self.variant_typed else blob
+            return blob
 
         if blob is None:
             raise IndexError(f"{index} out of range")
@@ -276,16 +284,15 @@ class StoredList(StoredObject):
         start = self.struct_unpack_from(mv, self.byte_length * slot)[0]
         end = self.struct_unpack_from(mv, self.byte_length * (slot + 1))[0]
 
-        # slice out the data and decode
+        # slice out the data
         data = mv[self.HEADER_BYTE_COUNT + start: self.HEADER_BYTE_COUNT + end]
 
         if data is None:
             raise ValueError("db corrupted")
-        result = StoredObject.decode_val(data) if self.variant_typed else data
-        self._cache[index] = result
-        return result
+        self._cache[index] = data
+        return data
 
-    def __setitem__(self, index: int, value: str) -> None:
+    def __setitem__(self, index: int, value: bytes) -> None:
         # update cache, and buffer or lmdb depending on position
         length = len(self)
         if index < 0:
@@ -297,15 +304,8 @@ class StoredList(StoredObject):
             # if in active buffer space, write into it
             self._buffer[index - self._persisted_len] = value
         else:
-            # otherwise, put into db
-            if self.set_instantly:
-                if index in self._cache and self._cache[index] == value:
-                    return
-                with self.env.begin(write=True, db=self._db) as txn:
-                    txn.put(StoredList.int_pack(idx),
-                            StoredObject.encode_val(value) if self.variant_typed else value)
-            else:
-                self._index_buffer[index] = value
+            # otherwise, write into dict
+            self._index_buffer[index] = value
         if self.cache_on_set:
             self._cache[index] = value
 
@@ -324,9 +324,8 @@ class StoredList(StoredObject):
                     cursor = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
                     for j in range(i + 1):
                         v = next(cursor)
-                decoded = v if not self.variant_typed else StoredObject.decode_val(v)
-                self._cache[i] = decoded
-                yield decoded
+                self._cache[i] = v
+                yield v
         for v in self._buffer:
             yield v
 
@@ -337,9 +336,6 @@ class StoredList(StoredObject):
 from time import perf_counter
 class StoredDict(StoredObject):
     # LMDB-backed dict with buffered writes and read cache.
-    # Keys are strings, values can be one of the following
-    # types:
-    # None, str, int, bytes
 
     def __init__(self, buffer_size: int = 0, **kwargs):
         # initialize lmdb db, buffers and cache
@@ -350,13 +346,11 @@ class StoredDict(StoredObject):
         self._put_buffer = {}  # pending sets
         self._del_buffer = set()  # pending deletes
         self._cache = {}  # in-memory read cache
-        with self.env.begin(db=self._db) as txn:
-            self.length = int(txn.stat(db=self._db)["entries"])
+        self.absent = set([])
 
-    def __setitem__(self, key: str, value) -> None:
+    def __setitem__(self, key: bytes, value) -> None:
         # buffer set and update cache
         if self.cache_on_set:
-            self.length += 1
             self._cache[key] = value
         self._put_buffer[key] = value
         if self._del_buffer:
@@ -364,7 +358,7 @@ class StoredDict(StoredObject):
         if self._buf_limit and len(self._put_buffer) >= self._buf_limit:
             self.flush_buffer()
 
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: bytes):
         # retrieve from cache, buffer or lmdb
         if key in self._cache:
             return self._cache[key]
@@ -372,40 +366,42 @@ class StoredDict(StoredObject):
             return self._put_buffer[key]
         if key in self._del_buffer:
             raise KeyError(key)
-        data = env.begin(db=self._db, write=False).get(key.encode("ascii"))
+        data = env.begin(db=self._db, write=False).get(key)
         if data is None:
             raise KeyError(key)
-        value = StoredObject.decode_val(data) if self.variant_typed else data.decode("ascii")
-        self._cache[key] = value
-        return value
+        self._cache[key] = data
+        return data
 
-    def __delitem__(self, key: str) -> None:
+    def __delitem__(self, key: bytes) -> None:
         # buffer delete and update cache
         if key in self._put_buffer:
             self._put_buffer.pop(key)
-        if not key in self._del_buffer:
-            self.length -= 1
-            self._del_buffer.add(key)
+        self._del_buffer.add(key)
         if self._cache:
             self._cache.pop(key, None)
         if self._buf_limit and len(self._del_buffer) >= self._buf_limit:
             self.flush_buffer()
 
+    def _puts_gen(self):
+        for i in self._put_buffer.keys():
+            yield (i, self._put_buffer[i])
+
     def _flush_buffer(self) -> None:
         # apply buffered sets and deletes to lmdb
         if not self._put_buffer and not self._del_buffer:
             return
-        with self.env.begin(write=True, db=self._db, ) as txn:
-            for key, val in self._put_buffer.items():
-                txn.put(key.encode("ascii"),
-                        StoredObject.encode_val(val) if self.variant_typed else val.encode("ascii"))
-            for key in self._del_buffer:
-                txn.delete(key.encode("ascii"))
+        with self.env.begin(write=True, db=self._db, buffers=True) as txn:
+            cursor = txn.cursor()
+            cursor.putmulti(append=True, items=self._puts_gen())
+        for key in self._del_buffer:
+            txn.delete(key)
+            self.absent.add(key)
         self._put_buffer.clear()
         self._del_buffer.clear()
 
     def __len__(self) -> int:
-        return self.length
+        with self.env.begin(db=self._db) as txn:
+            return int(txn.stat(db=self._db)["entries"])
 
     def iterate(self, keys=True, values=False):
         # iterate keys, with cache reading
@@ -419,17 +415,14 @@ class StoredDict(StoredObject):
                 if values:
                     value = element if values and not keys else element[1]
 
-                key = key.decode()
                 if key in self._del_buffer: continue
                 if key in self._cache:
                     yield (key if keys else None, self._cache[key] if values else None)
                     continue
-                decoded_val = None
                 if values:
-                    decoded_val = StoredObject.decode_val(value) if self.variant_typed else value.decode("ascii")
                     if key is not None:
-                        self._cache[key] = decoded_val
-                yield (key if keys else None, decoded_val)
+                        self._cache[key] = value
+                yield (key if keys else None, value)
 
         if keys and values:
             yield from self._put_buffer.items()
@@ -441,11 +434,17 @@ class StoredDict(StoredObject):
     def __iter__(self):
         raise NameError('Use method "iterate" instead')
 
-    def __contains__(self, key: str) -> bool:
+    def __contains__(self, key: bytes) -> bool:
         # check presence considering buffers
-        if key in self._cache:
+        if key in self._cache or key in self._put_buffer:
             return True
-        return env.begin(db=self._db, write=False).get(key.encode("ascii")) is not None
+        if key in self.absent:
+            return False
+        got = env.begin(db=self._db, write=False).get(key)
+        if got is None:
+            self.absent.add(key); return False
+        self._cache[key] = got
+        return True
 
     def __repr__(self) -> str:
         return f"<StoredDict entries={len(self)}>"
@@ -487,23 +486,23 @@ class ScalableStoredDict:
         self.length = sum(len(s) for s in self.shards)
 
 
-    def __setitem__(self, key: str, value):
+    def __setitem__(self, key: bytes, value):
         shard = self.shards[self.sharding_call(key)]
         prev = shard.length
         shard[key] = value
         self.length += shard.length - prev
 
-    def __getitem__(self, key: str):
+    def __getitem__(self, key: bytes):
         shard = self.shards[self.sharding_call(key)]
         return shard[key]
 
-    def __delitem__(self, key: str):
+    def __delitem__(self, key: bytes):
         shard = self.shards[self.sharding_call(key)]
         prev = shard.length
         del shard[key]
         self.length += shard.length - prev
 
-    def __contains__(self, key: str) -> bool:
+    def __contains__(self, key: bytes) -> bool:
         return key in self.shards[self.sharding_call(key)]
 
     def __len__(self) -> int:
@@ -560,7 +559,7 @@ class ScalableStoredList:
         ]
         self.length = sum(len(s) for s in self.shards)
 
-    def append(self, value: str) -> None:
+    def append(self, value: bytes) -> None:
         # global index before append
         shard_idx = self.length % self.num_shards
         self.shards[shard_idx].append(value)
