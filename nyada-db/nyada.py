@@ -22,7 +22,6 @@ def open_environment(name: str,
     sync=lock_safe
 )
 
-
 env = open_environment("db", 1024, False) # 1 GiB
 
 class StoredReference:
@@ -72,6 +71,7 @@ def decode_val(data: bytes):
 from math import log2
 class StoredObject:
     __slots__ = ("variant_typed", "flushing_thread", "name", "cache_on_set", "env")
+
 
     def _flush_buffer(self):
         pass
@@ -127,13 +127,13 @@ class StoredObject:
         self.struct_pack_into = struct.Struct(struct_type).pack_into # unsigned big-endian short
         self.struct_unpack_from = struct.Struct(struct_type).unpack_from
 
-
+        self.stat = env.open_db((name + "__stat").encode("ascii"), create=True)
+        self.map_stat()
 
 class StoredList(StoredObject):
     # LMDB-backed list with in-memory buffer and cache.
     # Append-only.
 
-    LENGTH_KEY = b'__LIST_LEN__'
     int_pack = lambda index: struct.pack(">Q", index)
 
     def __init__(self, buffer_size: int = 0, **kwargs):
@@ -141,14 +141,14 @@ class StoredList(StoredObject):
         name = kwargs["name"]
         # initialize lmdb db, buffer and cache
         self._db = env.open_db(name.encode("ascii"), create=True)
+        self.stat = env.open_db((name + "__stat").encode("ascii"), create=True)
 
-        with self.env.begin(db=self._db) as txn:
+        with self.env.begin(db=self.stat) as txn:
             raw = txn.get(StoredList.LENGTH_KEY)
         if raw is None:
             self._persisted_len = 0
         else:
             self._persisted_len = struct.unpack(">Q", raw)[0]
-            print(self._persisted_len)
 
         self._buffer = []  # pending appends to flush_buffer
         self._buf_limit = buffer_size
@@ -156,6 +156,9 @@ class StoredList(StoredObject):
         self._index_buffer = {}
         self.append = self._buffer.append
         self.buffer_batches = {}
+
+        self.old_header = bytearray(self.HEADER_BYTE_COUNT)  # zero-filled
+        self.old_body = bytearray()
 
     def _puts_gen_batched(self):
         pack_into = self.struct_pack_into
@@ -168,9 +171,24 @@ class StoredList(StoredObject):
         page = idx // batch_size
         boundary = (page + 1) * batch_size
 
-        header = bytearray(header_bytes)  # zero-filled
-        body = bytearray()
         running = 0
+        if self.old_header:
+            header = self.old_header
+            body = self.old_body
+        else:
+            first_page = self._persisted_len // batch_size
+            offset_in_page = self._persisted_len % batch_size
+            if offset_in_page != 0:
+                raw = txn.get(int_pack(first_page))
+                header = bytearray(raw[:header_bytes])
+                body = bytearray(raw[header_bytes:])
+                # compute running from header[offset_in_page]
+                running = unpack_from(header, byte_len * offset_in_page)
+            else:
+                header = self.old_header
+                body = self.old_body
+
+
 
         for v in self._buffer:
             if self.cache_on_set:
@@ -207,9 +225,11 @@ class StoredList(StoredObject):
             pack_into(header, byte_len * (slot_idx + 1), running)
             yield (int_pack(page), memoryview(header + body))
 
+        self.old_header, self.old_body = header, body
+
     def _puts_gen_single(self):
         idx = self._persisted_len
-        for v in self.buffer_batches:
+        for v in self._buffer:
             yield (StoredList.int_pack(idx), v)
             idx += 1
 
@@ -233,7 +253,7 @@ class StoredList(StoredObject):
         with self.env.begin(write=True, db=self._db, buffers=True) as txn:
             cursor = txn.cursor()
             cursor.putmulti(append=True, items=self._puts_gen_batched() if self.do_batch_writes else self._puts_gen_single())
-            #print(type(cursor.getmulti(keys=[str(i).encode("ascii") for i in range(len(self._buffer))] )))
+        with self.env.begin(write=True, db=self.stat) as txn:
             txn.put(
                     StoredList.LENGTH_KEY,
                     struct.pack(">Q", total)
@@ -268,9 +288,7 @@ class StoredList(StoredObject):
         # fetch the packed page
         with env.begin(db=self._db, write=False, buffers=True) as txn:
             blob = txn.get(key)
-            print(key)
         if blob is None:
-
             raise IndexError(f"{index} out of range")
 
         if not self.do_batch_writes:
