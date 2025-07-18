@@ -167,11 +167,14 @@ class StoredObject:
         self.struct_unpack_from = struct.Struct(struct_type).unpack_from
 
         self.stat_cache = {}
+        self.typecode = "Q"
+        self.struct_unpack = ">QQ"
 
         self.map_stat()
 
 
 from array import array
+
 class StoredList(StoredObject):
     # LMDB-backed list with in-memory buffer and cache.
     # Append-only.
@@ -199,9 +202,13 @@ class StoredList(StoredObject):
         self._index_buffer = {}
         self.append = self._buffer.append
         self.buffer_batches = {}
+        self.read_txn = self.env.begin(db=self._db, write=False, buffers=True)
 
         self.old_header = bytearray(self.HEADER_BYTE_COUNT)  # zero-filled
         self.old_body = bytearray()
+        #self._zero_header = bytearray(self.HEADER_BYTE_COUNT)
+        self.fetched_blobs = {}
+        print(self.HEADER_BYTE_COUNT)
 
     def _puts_gen_batched(self):
         int_pack = StoredList.int_pack
@@ -325,6 +332,7 @@ class StoredList(StoredObject):
 
     def _flush_buffer(self) -> None:
         # write buffered items to lmdb
+
         if not self._buffer:
             return
 
@@ -364,33 +372,33 @@ class StoredList(StoredObject):
             page, slot = divmod(index, self.batch_size)
             key = StoredList.int_pack(page)
         else:
-            # no expensive divmod
             key = StoredList.int_pack(index)
 
         # fetch the packed page
-        with env.begin(db=self._db, write=False, buffers=True) as txn:
-            blob = txn.get(key)
-        if blob is None:
-            raise IndexError(f"{index} out of range")
+        if not self.do_batch_writes:
+            blob = self.read_txn.get(key)
+        elif not key in self.fetched_blobs:
+            blob = self.read_txn.get(key)
+            self.fetched_blobs[key] = blob
+        else:
+            blob = self.fetched_blobs[key]
+
+        if blob is None: raise IndexError(f"{index} out of range")
 
         if not self.do_batch_writes:
             return blob
 
-        if blob is None:
-            raise IndexError(f"{index} out of range")
+        # array of unsigned offsets
+        hdr_view = blob[:self.HEADER_BYTE_COUNT].cast('Q')
 
-        mv = memoryview(blob)
-        # read start/end offsets directly from header
-        start = self.struct_unpack_from(mv, self.byte_length * slot)[0]
-        end = self.struct_unpack_from(mv, self.byte_length * (slot + 1))[0]
+        start = hdr_view[slot]
+        end = hdr_view[slot + 1]
 
-        # slice out the data
-        data = mv[self.HEADER_BYTE_COUNT + start: self.HEADER_BYTE_COUNT + end]
+        value = blob[self.HEADER_BYTE_COUNT + start: self.HEADER_BYTE_COUNT + end]
 
-        if data is None:
-            raise ValueError("db corrupted")
-        self._cache[index] = data
-        return data
+        if self.cache_on_set:
+            self._cache[index] = value
+        return value
 
     def __setitem__(self, index: int, value: bytes) -> None:
         # update cache, and buffer or lmdb depending on position
