@@ -12,7 +12,7 @@ shard = lambda s: xxhash.xxh32(s).intdigest() % 50
 
 
 #scalable = ScalableStoredDict(name="hii", num_shards=50, buffer_size=0, variant_typed=False, sharding_call=shard, env_size_mb=30 )
-scalable = StoredList(name="hii2", cache_on_set=False, batch_writes=512, max_length=len(str(1000000000000)), constant_length=1)
+scalable = StoredList(name="hii2", cache_on_set=False, batch_writes=512, max_length=5, constant_length=1)
 
 if 0:
     j = 0
@@ -24,7 +24,7 @@ if 0:
     quit()
 
 for i in range(1000000):
-    scalable.append(str(1000000000000).encode("ascii"))
+    scalable.append(str(5).encode("ascii"))
 
 #del scalable[b"5"]
 t = perf_counter()
