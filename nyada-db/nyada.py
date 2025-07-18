@@ -289,6 +289,7 @@ class StoredList(StoredObject):
             yield (StoredList.int_pack(idx), v)
             idx += 1
 
+    """
     def _puts_gen_constant(self):
         int_pack = StoredList.int_pack
         bs = self.batch_size
@@ -327,17 +328,17 @@ class StoredList(StoredObject):
         # stash trailing partial page for next time
         tail_start = (total_pages - 1) * bs * bl
         self.old_body = bytearray(all_bytes[tail_start:])
-
     """
+
     def _puts_gen_constant(self):
         int_pack = StoredList.int_pack
         bs, bl = self.batch_size, self.byte_length
 
-        # where we left off
+        # figure out where we left off
         start_page = self._persisted_len // bs
         start_off = self._persisted_len % bs
 
-        # load any partial‐page bytes
+        # load any existing partial‐page bytes
         if self.old_body:
             old_bytes = bytes(self.old_body)
         elif start_off:
@@ -351,10 +352,9 @@ class StoredList(StoredObject):
         total_items = start_off + len(buf)
         total_pages = (total_items + bs - 1) // bs
 
+        # stream out each page
         for p in range(total_pages):
             page = start_page + p
-
-            # global‐item range for this page
             gstart = p * bs
             gend = min(gstart + bs, total_items)
 
@@ -369,12 +369,22 @@ class StoredList(StoredObject):
                 # subsequent pages: only join the new records
                 chunk = b''.join(buf[bstart:bend])
 
-            # stash the last incomplete page for next call
-            if p == total_pages - 1:
-                self.old_body = bytearray(chunk)
-
             yield int_pack(page), memoryview(chunk)
-    """
+
+        # optionally flush the trailing partial page right now
+        if self.old_body:
+            # compute next page index
+            flush_page = start_page + total_pages
+            items_in_partial = len(self.old_body) // bl
+
+            # yield that partial page
+            yield int_pack(flush_page), memoryview(self.old_body)
+
+            # update persisted length so next start_off is zeroed
+            self._persisted_len += items_in_partial
+            # clear the buffer of partial bytes
+            self.old_body = bytearray()
+
 
     def _flush_buffer(self) -> None:
         # write buffered items to lmdb
