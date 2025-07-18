@@ -208,7 +208,6 @@ class StoredList(StoredObject):
         self.old_body = bytearray()
         #self._zero_header = bytearray(self.HEADER_BYTE_COUNT)
         self.fetched_blobs = {}
-        print(self.HEADER_BYTE_COUNT)
 
     def _puts_gen_batched(self):
         int_pack = StoredList.int_pack
@@ -329,6 +328,53 @@ class StoredList(StoredObject):
         tail_start = (total_pages - 1) * bs * bl
         self.old_body = bytearray(all_bytes[tail_start:])
 
+    """
+    def _puts_gen_constant(self):
+        int_pack = StoredList.int_pack
+        bs, bl = self.batch_size, self.byte_length
+
+        # where we left off
+        start_page = self._persisted_len // bs
+        start_off = self._persisted_len % bs
+
+        # load any partial‐page bytes
+        if self.old_body:
+            old_bytes = bytes(self.old_body)
+        elif start_off:
+            with self.env.begin(db=self._db, write=False) as txn:
+                raw = txn.get(int_pack(start_page)) or b''
+            old_bytes = raw[: start_off * bl]
+        else:
+            old_bytes = b''
+
+        buf = self._buffer
+        total_items = start_off + len(buf)
+        total_pages = (total_items + bs - 1) // bs
+
+        for p in range(total_pages):
+            page = start_page + p
+
+            # global‐item range for this page
+            gstart = p * bs
+            gend = min(gstart + bs, total_items)
+
+            # slice of new‐buffer for this page
+            bstart = max(0, gstart - start_off)
+            bend = gend - start_off
+
+            if p == 0 and start_off:
+                # first page: prefix whatever was left over
+                chunk = old_bytes + b''.join(buf[:bend])
+            else:
+                # subsequent pages: only join the new records
+                chunk = b''.join(buf[bstart:bend])
+
+            # stash the last incomplete page for next call
+            if p == total_pages - 1:
+                self.old_body = bytearray(chunk)
+
+            yield int_pack(page), memoryview(chunk)
+    """
 
     def _flush_buffer(self) -> None:
         # write buffered items to lmdb
