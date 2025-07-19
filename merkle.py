@@ -3,7 +3,7 @@ from collections import defaultdict
 from typing import List, Dict, Optional, Tuple, Any
 
 # Merkle-Mountain-Range (mmr) data structures
-node_hashes: Dict[int, bytes] = {}                      # append-only dict of node hashes
+node_hashes: list[int, bytes] = []                      # append-only list of node hashes
 node_hash_indexes: Dict[bytes, int] = defaultdict(list)  # map node-hash to its positions
 internal_nodes_by_height: Dict[int, Dict[int, bytes]] = {}    # map level->(start_index->subtree-root)
 peaks: List[Optional[bytes]] = []                   # current peak roots by height

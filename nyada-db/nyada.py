@@ -1,4 +1,5 @@
 # Nyada 1.0.0
+# Speed benchmark:
 
 import lmdb
 import struct
@@ -18,27 +19,29 @@ def open_environment(name: str,
     map_size=size_mb * 1024 ** 2,
     writemap=True,
     map_async=True,
+    readahead=False,
     metasync=lock_safe,
     sync=lock_safe
 )
 
-env = open_environment("db", 1024, False) # 1 GiB
+env = open_environment("db", 4096, False) # 1 GiB
 
 class StoredReference:
     references = {}
-
     @staticmethod
-    def get_from_name(id: int):
-        return StoredReference.references[id]
-
-    def __init__(self, of: "StoredObject"):
-        assert isinstance(of, StoredObject), f'"of" must be a StoredObject, not {type(of).__name__}'
-        StoredReference.references[id(of)] = of
+    def register(instance: "StoredObject"):
+        StoredReference.references[instance.name] = instance
+    def __init__(self, name: bytes):
+        self.name = name
+    @staticmethod
+    def from_reference(name: bytes) -> "StoredObject":
+        return references[name]
 class Types:
     TYPE_STR = str
     TYPE_INT = int
     TYPE_BYTES = bytes
     TYPE_NONE = type(None)
+    TYPE_SREF = StoredReference
 
 
 def encode_val(value) -> bytes:
@@ -49,6 +52,8 @@ def encode_val(value) -> bytes:
             return b'i' + str(value).encode('ascii')
         case Types.TYPE_BYTES:
             return b'b' + value
+        case Types.TYPE_SREF:
+            return b'r' + value.name
         case Types.TYPE_NONE:
             return b'n'
         case _:
@@ -65,10 +70,12 @@ def decode_val(data: bytes):
             return payload
         case 110:   # ord('n')
             return None
+        case 114: # ord('r')
+            return StoredReference.from_name(payload)
         case _:
             raise ValueError(f"unknown typecode: {chr(code)}")
 
-from math import log2
+
 class StoredObject:
     __slots__ = ("variant_typed", "flushing_thread", "name", "cache_on_set", "env", "stat", "stat_cache")
     stat_fields = {b"length": b"0", b"type": b"0", b"batch_writes": b"0"}
@@ -129,28 +136,23 @@ class StoredObject:
         else:
             self._flush_buffer()
 
-    @staticmethod
-    def get_struct_format(n):
-        # U min/max for 1, 2, 4, 8 bytes
-        struct_types = {0: ">B", 1: ">B", 2: ">H", 4: ">L", 8: ">Q"}
-        keys = list(struct_types.keys())
-        for i in range(1, len(struct_types)):
-            if keys[i]-1 <= n <= keys[i]:
-                return struct_types[keys[i]]
-        raise OverflowError("number too large for 8 bytes unsigned")
 
     def __init__(self,
-                 name="",              # db name
-                 env=env,              # dbs personal env (if not set, will use global env)
-                 cache_on_set=True,    # auto cache on __setitem__ calls at cost of perfomance
-                 max_length=0,         # maximal element length (for batch writes)
-                 batch_writes=0,       # will put multiple values under same key for fewer PUT requests
-                 constant_length=False # if True, and batching is enabled, will significantly speed up
-                                       # set/get/flush ops, with an assumption that length of every
-                                       # byte string is same
+                 name="",                 # - db name
+                 env=env,                 # - dbs personal env (if not set, will use global env)
+                 cache_on_set=True,       # - auto cache on __setitem__ calls at cost of perfomance
+                 max_length=0,            # - maximal element length (for batch writes)
+                 batch_writes=0,          # - will put multiple values under same key for fewer PUT requests
+                                          # This can give perfomance boost for appends and reads/writes
+                                          # in nearby indexes. The perfomance will decrease with element size
+                                          # growth, so it's a good option for smaller items.
+                 constant_length=False,   # - if True, and batch_writes=True, will significantly speed
+                                          # up set/get/flush ops, with an assumption that length of
+                                          # every byte string is same.
                  ):
         assert name, "Name must be a non-empty string"
-        self.stat = env.open_db((name + "__stat").encode("ascii"), create=True)
+        self.name = name
+        self.stat = env.open_db((name.decode("ascii") + "__stat").encode("ascii"), create=True)
 
         self.env = env
         self.cache_on_set = cache_on_set
@@ -158,17 +160,20 @@ class StoredObject:
         self.batch_size = batch_writes
         self.flushing_thread = None
         self.constant_length = constant_length
+        self.max_length = max_length
 
         self.byte_length = 8
         self.HEADER_SLOT_COUNT = batch_writes + 1 # N items + final end-offset
         self.HEADER_BYTE_COUNT = self.HEADER_SLOT_COUNT * self.byte_length  # 1 short = 2 bytes
-        struct_type = StoredObject.get_struct_format(self.byte_length)
-        self.struct_pack_into = struct.Struct(struct_type).pack_into # unsigned big-endian short
-        self.struct_unpack_from = struct.Struct(struct_type).unpack_from
+
+        self.struct_pack_into = struct.Struct(">Q").pack_into
+        self.struct_unpack_from = struct.Struct(">Q").unpack_from
 
         self.stat_cache = {}
         self.typecode = "Q"
         self.struct_unpack = ">QQ"
+
+        self.pack_format = f"={self.batch_size+1}Q"
 
         self.map_stat()
 
@@ -179,7 +184,7 @@ class StoredList(StoredObject):
     # LMDB-backed list with in-memory buffer and cache.
     # Append-only.
 
-    int_pack = lambda index: struct.pack(">Q", index)
+    int_pack = lambda index: struct.pack("=Q", index)
     stat_fields = {b"type": b"1"}
 
     def _map_stat(self, txn):
@@ -190,8 +195,9 @@ class StoredList(StoredObject):
     def __init__(self, buffer_size: int = 0, **kwargs):
         super().__init__(**kwargs)
         name = kwargs["name"]
+        self._batched_writes = {}
         # initialize lmdb db, buffer and cache
-        self._db = env.open_db(name.encode("ascii"), create=True)
+        self._db = env.open_db(name, create=True, integerkey=True)
         if not self.do_batch_writes:
             with self.env.begin(db=self._db) as txn:
                 self._persisted_len = int(txn.stat(db=self._db)["entries"])
@@ -210,77 +216,50 @@ class StoredList(StoredObject):
         self.fetched_blobs = {}
 
     def _puts_gen_batched(self):
+        pack_into = self.struct_pack_into
         int_pack = StoredList.int_pack
         batch_size = self.batch_size
-        byte_len = self.byte_length
 
-        # where we left off
-        page = self._persisted_len // batch_size
-        offset_in_page = self._persisted_len % batch_size
-
-        # prepare header array (batch_size+1 slots: start offsets + final end offset)
-        header_arr = array('Q', [0] * (batch_size + 1))
-        body_chunks = []
-
-        # if there's an in-mem partial page, reload it
-        if self.old_header:
-            # old_header is a bytearray of length (batch_size+1)*byte_len
-            header_arr = array('Q')
-            header_arr.frombytes(self.old_header)
-            # old_body is a bytearray of existing data
-            body_chunks = [bytes(self.old_body)]
-            running = header_arr[offset_in_page]
-        else:
-            running = 0
-            # if we’re starting mid-page, fetch existing page
-            if offset_in_page:
-                with self.env.begin(db=self._db, write=False, buffers=True) as txn:
-                    raw = txn.get(int_pack(page)) or b''
-                # split header / body out of raw
-                hdr_bytes = raw[: byte_len * (batch_size + 1)]
-                body_bytes = raw[byte_len * (batch_size + 1):
-                                 byte_len * (batch_size + 1) + offset_in_page * byte_len]
-                header_arr = array('Q')
-                header_arr.frombytes(hdr_bytes)
-                body_chunks = [body_bytes]
-                running = header_arr[offset_in_page]
-
-        slot = offset_in_page
         idx = self._persisted_len
+        page = idx // batch_size
+        boundary = (page + 1) * batch_size
+
+        header = bytearray(self.HEADER_BYTE_COUNT)  # zero-filled
+        body = bytearray()
+        running = 0
 
         for v in self._buffer:
-            if self.cache_on_set:
-                self._cache[idx] = v
+            # did we cross into the next 100-batch?
+            if idx >= boundary:
+                # write the final end-offset for the previous page
+                slot_idx = (idx - 1) % batch_size
+                pack_into(header, 4 * (slot_idx + 1), running)
+                # emit it
+                yield (int_pack(page), bytes(header) + bytes(body))
 
-            # mark start-offset for this slot
-            header_arr[slot] = running
-            body_chunks.append(v)
-            running += len(v)
+                # start next page
+                page = idx // batch_size
+                boundary = (page + 1) * batch_size
+                header = bytearray(self.HEADER_BYTE_COUNT)
+                body = bytearray()
+                running = 0
 
-            slot += 1
+            # record start-offset of this slot
+            slot = idx % batch_size
+            pack_into(header, 4 * slot, running)
+
+            # append the data
+            b = v
+            body.extend(b)
+            running += len(b)
+
             idx += 1
 
-            # once we've filled batch_size items, flush
-            if slot == batch_size:
-                header_arr[batch_size] = running
-                data = header_arr.tobytes() + b''.join(body_chunks)
-                yield (int_pack(page), memoryview(data))
-
-                # reset for next page
-                page += 1
-                slot = 0
-                running = 0
-                body_chunks.clear()
-
-        # flush any remaining partial page
-        if slot != offset_in_page:
-            header_arr[slot] = running
-            data = header_arr.tobytes() + b''.join(body_chunks)
-            yield (int_pack(page), memoryview(data))
-
-        # save header/body for next invocation
-        self.old_header = bytearray(header_arr.tobytes())
-        self.old_body = bytearray().join(body_chunks)
+        # flush the last (partial) page
+        if running or body:
+            slot_idx = (idx - 1) % batch_size
+            pack_into(header, 4 * (slot_idx + 1), running)
+            yield (int_pack(page), memoryview(header + body))
 
     def _puts_gen_single(self):
         # usual yield
@@ -289,50 +268,9 @@ class StoredList(StoredObject):
             yield (StoredList.int_pack(idx), v)
             idx += 1
 
-    """
     def _puts_gen_constant(self):
         int_pack = StoredList.int_pack
-        bs = self.batch_size
-        bl = self.byte_length
-
-        # figure out where we left off
-        start_page = self._persisted_len // bs
-        start_off = self._persisted_len % bs
-
-        # load any existing partial-page bytes
-        if self.old_body:
-            old_bytes = bytes(self.old_body)
-        elif start_off:
-            with self.env.begin(db=self._db, write=False) as txn:
-                raw = txn.get(int_pack(start_page)) or b''
-            old_bytes = raw[: start_off * bl]
-        else:
-            old_bytes = b''
-
-        new_bytes = b''.join(self._buffer)  # each v is already length bl
-        all_bytes = old_bytes + new_bytes
-
-        total_items = start_off + len(self._buffer)
-        total_pages = (total_items + bs - 1) // bs
-
-        for page_idx in range(total_pages):
-            # compute slice in bytes
-            item_start = page_idx * bs
-            item_end = min(item_start + bs, total_items)
-            b_start = item_start * bl
-            b_end = item_end * bl
-
-            page = start_page + page_idx
-            yield int_pack(page), memoryview(all_bytes[b_start:b_end])
-
-        # stash trailing partial page for next time
-        tail_start = (total_pages - 1) * bs * bl
-        self.old_body = bytearray(all_bytes[tail_start:])
-    """
-
-    def _puts_gen_constant(self):
-        int_pack = StoredList.int_pack
-        bs, bl = self.batch_size, self.byte_length
+        bs, bl = self.batch_size, self.max_length
 
         # figure out where we left off
         start_page = self._persisted_len // bs
@@ -351,7 +289,8 @@ class StoredList(StoredObject):
         buf = self._buffer
         total_items = start_off + len(buf)
         total_pages = (total_items + bs - 1) // bs
-
+        if total_items == start_off and not buf:
+            return
         # stream out each page
         for p in range(total_pages):
             page = start_page + p
@@ -368,28 +307,69 @@ class StoredList(StoredObject):
             else:
                 # subsequent pages: only join the new records
                 chunk = b''.join(buf[bstart:bend])
-
+            # print(page)
             yield int_pack(page), memoryview(chunk)
 
-        # optionally flush the trailing partial page right now
-        if self.old_body:
-            # compute next page index
-            flush_page = start_page + total_pages
-            items_in_partial = len(self.old_body) // bl
+    def _sets_gen(self):
+        for idx, value in self._index_buffer.items():
+            yield StoredList.int_pack(idx), value
 
-            # yield that partial page
-            yield int_pack(flush_page), memoryview(self.old_body)
+    def _sets_gen_batched(self):
+        int_pack = StoredList.int_pack
+        bs = self.batch_size
+        hdr_bytes = self.HEADER_BYTE_COUNT
+        # read-only txn for fetching current pages
+        txn = self.read_txn
 
-            # update persisted length so next start_off is zeroed
-            self._persisted_len += items_in_partial
-            # clear the buffer of partial bytes
-            self.old_body = bytearray()
+        for page,blob in self.get_results:
+            assigns = self._batched_writes[page]
+            #blob = txn.get(key)
+            # if blob is None:
+            #     # no existing page to patch
+            #     continue
+
+            if self.constant_length:
+                # fixed-size slots, just overwrite the slice
+                bl = self.max_length
+                chunk = bytearray(blob)
+                for slot, v in assigns.items():
+                    if len(v) != bl:
+                        raise ValueError(f"slot {slot}: expected length {bl}, got {len(v)}")
+                    start = slot * bl
+                    chunk[start:start+bl] = v
+            else:
+                # variable-length: rebuild header + body
+                header = blob[:hdr_bytes]
+                offsets = struct.unpack(self.pack_format, header)  # tuple of bs+1 offsets
+
+                # collect each slot’s bytes (new or old)
+                body_chunks = []
+                for slot in range(bs):
+                    if slot in assigns:
+                        chunk_bytes = assigns[slot]
+                    else:
+                        start = hdr_bytes + offsets[slot]
+                        end = hdr_bytes + offsets[slot + 1]
+                        chunk_bytes = blob[start:end]
+                    body_chunks.append(chunk_bytes)
+
+                # rebuild header array
+                new_header = array('Q', [0] * (bs + 1))
+                running = 0
+                for i, chunk_bytes in enumerate(body_chunks):
+                    new_header[i] = running
+                    running += len(chunk_bytes)
+                new_header[bs] = running
+
+                # concat and yield
+                chunk = new_header.tobytes() + b''.join(body_chunks)
+
+            yield page, memoryview(chunk)
 
 
     def _flush_buffer(self) -> None:
         # write buffered items to lmdb
-
-        if not self._buffer:
+        if not self._buffer and not self._batched_writes:
             return
 
         total = len(self._buffer) + self._persisted_len
@@ -402,9 +382,19 @@ class StoredList(StoredObject):
                 else:
                     call = self._puts_gen_batched
             cursor.putmulti(append=True, items=call())
+
+            call_sets = self._sets_gen
+            if self.do_batch_writes:
+                call_sets = self._sets_gen_batched
+
+            self.get_results = cursor.getmulti(self._batched_writes.keys())
+
+            cursor.putmulti(items=call_sets())
+
         if self.do_batch_writes:
             self.write_stat(key=b"length", value=str(total).encode("ascii"))
         self._persisted_len = total
+        self._batched_writes.clear()
         self._buffer.clear()
 
     def __len__(self) -> int:
@@ -426,11 +416,13 @@ class StoredList(StoredObject):
         if self.do_batch_writes:
             # figure page and slot
             page, slot = divmod(index, self.batch_size)
+            #print(page)
             key = StoredList.int_pack(page)
         else:
             key = StoredList.int_pack(index)
 
         # fetch the packed page
+
         if not self.do_batch_writes:
             blob = self.read_txn.get(key)
         elif not key in self.fetched_blobs:
@@ -442,15 +434,17 @@ class StoredList(StoredObject):
         if blob is None: raise IndexError(f"{index} out of range")
 
         if not self.do_batch_writes:
-            return blob
+            value = blob
+        elif self.constant_length:
+            value = blob[slot * self.max_length : (slot+1) * self.max_length]
+        else:
+            # array of unsigned offsets
+            hdr_view = blob[:self.HEADER_BYTE_COUNT]
+            offsets = struct.unpack(self.pack_format, hdr_view)
+            start, end = offsets[slot], offsets[slot+1]
 
-        # array of unsigned offsets
-        hdr_view = blob[:self.HEADER_BYTE_COUNT].cast('Q')
-
-        start = hdr_view[slot]
-        end = hdr_view[slot + 1]
-
-        value = blob[self.HEADER_BYTE_COUNT + start: self.HEADER_BYTE_COUNT + end]
+            body_offset = self.HEADER_BYTE_COUNT
+            value = blob[body_offset + start : body_offset + end]
 
         if self.cache_on_set:
             self._cache[index] = value
@@ -461,6 +455,7 @@ class StoredList(StoredObject):
         length = len(self)
         if index < 0:
             index += length
+
         if not 0 <= index < length:
             raise IndexError("assignment index out of range")
 
@@ -469,29 +464,59 @@ class StoredList(StoredObject):
             self._buffer[index - self._persisted_len] = value
         else:
             # otherwise, write into dict
-            self._index_buffer[index] = value
+            if self.do_batch_writes:
+                res = divmod(index, self.batch_size)
+                page, slot = StoredList.int_pack(res[0]), res[1]
+                if not page in self._batched_writes:
+                    self._batched_writes[page] = {slot: value}
+                else:
+                    self._batched_writes[page][slot] = value
+            else:
+                self._index_buffer[index] = value
         if self.cache_on_set:
             self._cache[index] = value
 
-    def __iter__(self):
-        cursor = None
+    def _default_iter(self):
+        cursor = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
+        cursor_index = 0
         for i in range(len(self)):
-            v = None
-            if cursor:
-                v = next(cursor)
             if i in self._cache:
                 # if index in cached, read corresp.val from your cache
                 yield self._cache[i]
             else:
-                # otherwise, create cursor
-                if not cursor:
-                    cursor = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
-                    for j in range(i + 1):
+                # otherwise, iter on cursor
+                n = i - cursor_index
+                if n != 1:
+                    for j in range(n):
+                        cursor_index += 1
                         v = next(cursor)
+                else:
+                    v = next(cursor)
+
                 self._cache[i] = v
                 yield v
-        for v in self._buffer:
-            yield v
+
+    def _batch_iter(self):
+        cursor = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
+        blob = None
+        for i in range(len(self)):
+            if i in self._cache: yield self._cache[i]
+            if i % self.batch_size == 0:
+                blob = next(cursor)
+            print(blob)
+
+    def _batch_iter_constant(self):
+        pass
+
+    def __iter__(self):
+        if self.do_batch_writes:
+            if self.constant_length:
+                yield from self._batch_iter_constant()
+            else:
+                yield from self._batch_iter()
+        else:
+            yield from self._default_iter()
+        yield from self._buffer
 
     def __repr__(self) -> str:
         return f"<StoredList len={len(self)}>"
@@ -506,7 +531,7 @@ class StoredDict(StoredObject):
         # initialize lmdb db, buffers and cache
         super().__init__(**kwargs)
         name = kwargs["name"]
-        self._db = self.env.open_db(name.encode("ascii"), create=True)
+        self._db = self.env.open_db(name, create=True)
         self._buf_limit = buffer_size
         self._put_buffer = {}  # pending sets
         self._del_buffer = set()  # pending deletes
@@ -549,7 +574,7 @@ class StoredDict(StoredObject):
 
     def _puts_gen(self):
         for i in self._put_buffer.keys():
-            yield (i, self._put_buffer[i])
+            yield (i, (self._put_buffer[i]))
 
     def _flush_buffer(self) -> None:
         # apply buffered sets and deletes to lmdb
@@ -557,9 +582,9 @@ class StoredDict(StoredObject):
             return
         with self.env.begin(write=True, db=self._db, buffers=True) as txn:
             cursor = txn.cursor()
-            cursor.putmulti(append=True, items=self._puts_gen())
+            cursor.putmulti(items=self._put_buffer.items())
         for key in self._del_buffer:
-            txn.delete(key)
+            cursor.delete(key)
             self.absent.add(key)
         self._put_buffer.clear()
         self._del_buffer.clear()
