@@ -140,7 +140,7 @@ class StoredObject:
     def __init__(self,
                  name="",                 # - db name
                  env=env,                 # - dbs personal env (if not set, will use global env)
-                 cache_on_set=True,       # - auto cache on __setitem__ calls at cost of perfomance
+                 cache_on_set=False,      # - auto cache on __setitem__ calls at cost of perfomance
                  max_length=0,            # - maximal element length (for batch writes)
                  batch_writes=0,          # - will put multiple values under same key for fewer PUT requests
                                           # This can give perfomance boost for appends and reads/writes
@@ -192,7 +192,7 @@ class StoredList(StoredObject):
             raw = self.get_stat(b"length")
             self._persisted_len = int(raw.decode())
 
-    def __init__(self, buffer_size: int = 0, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
         name = kwargs["name"]
         self._batched_writes = {}
@@ -203,63 +203,89 @@ class StoredList(StoredObject):
                 self._persisted_len = int(txn.stat(db=self._db)["entries"])
 
         self._buffer = []  # pending appends to flush_buffer
-        self._buf_limit = buffer_size
         self._cache = {}  # in-memory read cache
         self._index_buffer = {}
         self.append = self._buffer.append
         self.buffer_batches = {}
-        self.read_txn = self.env.begin(db=self._db, write=False, buffers=True)
 
         self.old_header = bytearray(self.HEADER_BYTE_COUNT)  # zero-filled
         self.old_body = bytearray()
         #self._zero_header = bytearray(self.HEADER_BYTE_COUNT)
         self.fetched_blobs = {}
 
+
     def _puts_gen_batched(self):
-        pack_into = self.struct_pack_into
         int_pack = StoredList.int_pack
         batch_size = self.batch_size
+        byte_len = self.byte_length
 
+        # where we left off
+        page = self._persisted_len // batch_size
+        offset_in_page = self._persisted_len % batch_size
+
+        # prepare header array (batch_size+1 slots: start offsets + final end offset)
+        header_arr = array('Q', [0] * (batch_size + 1))
+        body_chunks = []
+
+        # if there's an in-mem partial page, reload it
+        if self.old_header:
+            # old_header is a bytearray of length (batch_size+1)*byte_len
+            header_arr = array('Q')
+            header_arr.frombytes(self.old_header)
+            # old_body is a bytearray of existing data
+            body_chunks = [bytes(self.old_body)]
+            running = header_arr[offset_in_page]
+        else:
+            running = 0
+            # if we’re starting mid-page, fetch existing page
+            if offset_in_page:
+                with self.env.begin(db=self._db, write=False, buffers=True) as txn:
+                    raw = txn.get(int_pack(page)) or b''
+                # split header / body out of raw
+                hdr_bytes = raw[: byte_len * (batch_size + 1)]
+                body_bytes = raw[byte_len * (batch_size + 1):
+                                 byte_len * (batch_size + 1) + offset_in_page * byte_len]
+                header_arr = array('Q')
+                header_arr.frombytes(hdr_bytes)
+                body_chunks = [body_bytes]
+                running = header_arr[offset_in_page]
+
+        slot = offset_in_page
         idx = self._persisted_len
-        page = idx // batch_size
-        boundary = (page + 1) * batch_size
-
-        header = bytearray(self.HEADER_BYTE_COUNT)  # zero-filled
-        body = bytearray()
-        running = 0
 
         for v in self._buffer:
-            # did we cross into the next 100-batch?
-            if idx >= boundary:
-                # write the final end-offset for the previous page
-                slot_idx = (idx - 1) % batch_size
-                pack_into(header, 4 * (slot_idx + 1), running)
-                # emit it
-                yield (int_pack(page), bytes(header) + bytes(body))
+            # if self.cache_on_set:
+            #     self._cache[idx] = v
 
-                # start next page
-                page = idx // batch_size
-                boundary = (page + 1) * batch_size
-                header = bytearray(self.HEADER_BYTE_COUNT)
-                body = bytearray()
-                running = 0
+            # mark start-offset for this slot
+            header_arr[slot] = running
+            body_chunks.append(v)
+            running += len(v)
 
-            # record start-offset of this slot
-            slot = idx % batch_size
-            pack_into(header, 4 * slot, running)
-
-            # append the data
-            b = v
-            body.extend(b)
-            running += len(b)
-
+            slot += 1
             idx += 1
 
-        # flush the last (partial) page
-        if running or body:
-            slot_idx = (idx - 1) % batch_size
-            pack_into(header, 4 * (slot_idx + 1), running)
-            yield (int_pack(page), memoryview(header + body))
+            # once we've filled batch_size items, flush
+            if slot == batch_size:
+                header_arr[batch_size] = running
+                data = header_arr.tobytes() + b''.join(body_chunks)
+                yield (int_pack(page), memoryview(data))
+
+                # reset for next page
+                page += 1
+                slot = 0
+                running = 0
+                body_chunks.clear()
+
+        # flush any remaining partial page
+        if slot != offset_in_page:
+            header_arr[slot] = running
+            data = header_arr.tobytes() + b''.join(body_chunks)
+            yield (int_pack(page), memoryview(data))
+
+        # save header/body for next invocation
+        self.old_header = bytearray(header_arr.tobytes())
+        self.old_body = bytearray().join(body_chunks)
 
     def _puts_gen_single(self):
         # usual yield
@@ -319,14 +345,10 @@ class StoredList(StoredObject):
         bs = self.batch_size
         hdr_bytes = self.HEADER_BYTE_COUNT
         # read-only txn for fetching current pages
-        txn = self.read_txn
+        txn = self.env.begin(db=self._db, write=False, buffers=True)
 
         for page,blob in self.get_results:
             assigns = self._batched_writes[page]
-            #blob = txn.get(key)
-            # if blob is None:
-            #     # no existing page to patch
-            #     continue
 
             if self.constant_length:
                 # fixed-size slots, just overwrite the slice
@@ -401,6 +423,7 @@ class StoredList(StoredObject):
         # total items including buffered
         return self._persisted_len + len(self._buffer)
 
+
     def __getitem__(self, index: int) -> str:
         # support negative and cached reads
         length = len(self)
@@ -424,9 +447,11 @@ class StoredList(StoredObject):
         # fetch the packed page
 
         if not self.do_batch_writes:
-            blob = self.read_txn.get(key)
+            with self.env.begin(db=self._db, write=False, buffers=True) as txn:
+                blob = txn.get(key)
         elif not key in self.fetched_blobs:
-            blob = self.read_txn.get(key)
+            with self.env.begin(db=self._db, write=False, buffers=True) as txn:
+                blob = txn.get(key)
             self.fetched_blobs[key] = blob
         else:
             blob = self.fetched_blobs[key]
@@ -499,8 +524,9 @@ class StoredList(StoredObject):
     def _batch_iter(self):
         cursor = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
         blob = None
+        print("DFJJ")
         for i in range(len(self)):
-            if i in self._cache: yield self._cache[i]
+            if i in self._cache: pass#yield self._cache[i]
             if i % self.batch_size == 0:
                 blob = next(cursor)
             print(blob)
@@ -527,12 +553,11 @@ class StoredDict(StoredObject):
     # LMDB-backed dict with buffered writes and read cache.
     stat_fields = {b"type": b"2"}
 
-    def __init__(self, buffer_size: int = 0, **kwargs):
+    def __init__(self, **kwargs):
         # initialize lmdb db, buffers and cache
         super().__init__(**kwargs)
         name = kwargs["name"]
         self._db = self.env.open_db(name, create=True)
-        self._buf_limit = buffer_size
         self._put_buffer = {}  # pending sets
         self._del_buffer = set()  # pending deletes
         self._cache = {}  # in-memory read cache
@@ -545,8 +570,6 @@ class StoredDict(StoredObject):
         self._put_buffer[key] = value
         if self._del_buffer:
             self._del_buffer.discard(key)
-        if self._buf_limit and len(self._put_buffer) >= self._buf_limit:
-            self.flush_buffer()
 
     def __getitem__(self, key: bytes):
         # retrieve from cache, buffer or lmdb
@@ -569,8 +592,6 @@ class StoredDict(StoredObject):
         self._del_buffer.add(key)
         if self._cache:
             self._cache.pop(key, None)
-        if self._buf_limit and len(self._del_buffer) >= self._buf_limit:
-            self.flush_buffer()
 
     def _puts_gen(self):
         for i in self._put_buffer.keys():
@@ -653,7 +674,6 @@ class ScalableStoredDict:
         self,
         name: str,
         sharding_call: callable,
-        buffer_size: int = 0,
         num_shards: int = 1,
         env_size_mb: int = 0, # Will create separate environments for each shard if not 0
         **stored_kwargs
@@ -670,7 +690,7 @@ class ScalableStoredDict:
         for i in range(num_shards):
             shard_name = f"{name}_shard_{i}"
             new_env = env if not env_size_mb else open_environment(f"{name}/{i}_env", size_mb=env_size_mb, lock_safe=False, max_variables=1)
-            self.shards.append(StoredDict(name=shard_name, buffer_size=buffer_size, env=new_env, **stored_kwargs))
+            self.shards.append(StoredDict(name=shard_name, env=new_env, **stored_kwargs))
         # default to simple hash‐mod
         self.sharding_call = sharding_call
         self.length = sum(len(s) for s in self.shards)
@@ -735,7 +755,6 @@ class ScalableStoredList:
     def __init__(
         self,
         name: str,
-        buffer_size: int = 0,
         num_shards: int = 1,
         **stored_kwargs
     ):
@@ -744,7 +763,7 @@ class ScalableStoredList:
         self.num_shards = num_shards
         # create one StoredList per shard
         self.shards = [
-            StoredList(buffer_size=buffer_size, name=f"{name}_shard_{i}", **stored_kwargs)
+            StoredList(name=f"{name}_shard_{i}", **stored_kwargs)
             for i in range(num_shards)
         ]
         self.length = sum(len(s) for s in self.shards)

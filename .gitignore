@@ -1,1 +1,7 @@
-nyada-db/db
+nyada-db/*
+!nyada-db/nyada.py
+!nyada-db/db-boosts
+
+nyada-db/db-boosts/*
+!nyada-db/db-boosts/boosts.cpp
+!nyada-db/db-boosts/setup.py

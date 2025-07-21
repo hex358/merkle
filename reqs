@@ -1,4 +1,4 @@
 sanic
 lmdb
 discord-py-interactions
-xxhash
+pybind11
