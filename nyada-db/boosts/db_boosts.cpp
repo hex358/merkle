@@ -212,6 +212,7 @@ py::dict deserialize_fast32(py::bytes blob) {
 	return result;
 }
 
+
 PYBIND11_MODULE(db_boosts, m) {
 	m.doc() = "c++ boosts for db";
 	m.def("serialize_varint", &serialize_varint, "Compact varint mode");

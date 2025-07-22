@@ -7,7 +7,7 @@ ext_modules = [
     Pybind11Extension(
         name="db_boosts",
         sources=["db_boosts.cpp"],
-        #cxx_std=17,
+            cxx_std=20,
         include_dirs=[get_include(), r"C:\Users\Mike\Desktop\портфолио\msgproof\.venv\py\main\nyada-db\boosts\bitsery\include"],
         #language="c++"
         extra_compile_args=[
