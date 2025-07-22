@@ -1,9 +1,13 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
 #include <Python.h>
+#include <pybind11/buffer_info.h>
 #include <vector>
+#include <iostream>
 #include <string>
+#include <chrono>
 namespace py = pybind11;
+using namespace std;
 
 static inline size_t varint_size(uint64_t v) {
 	size_t sz = 0;
@@ -46,12 +50,6 @@ static inline void write_u64_le(uint64_t x, char* out) {
 }
 
 
-static inline uint32_t read_u32_le(const char* p) {
-	return uint32_t((uint8_t)p[0])
-	     | (uint32_t((uint8_t)p[1]) << 8)
-	     | (uint32_t((uint8_t)p[2]) << 16)
-	     | (uint32_t((uint8_t)p[3]) << 24);
-}
 
 // varint-based
 py::bytes serialize_varint(py::dict dict) {
@@ -61,7 +59,7 @@ py::bytes serialize_varint(py::dict dict) {
 	size_t total{};
 
 	struct IT { char* k; size_t kl; char* v; size_t vl; size_t ksz; size_t vsz; };
-	std::vector<IT> items;
+	vector<IT> items;
 	items.reserve(PyDict_Size(dict.ptr()));
 
 	// collect and size
@@ -69,7 +67,7 @@ py::bytes serialize_varint(py::dict dict) {
 		char *kp, *vp; Py_ssize_t kl, vl;
 		if (PyBytes_AsStringAndSize(key, &kp, &kl) < 0 ||
 		    PyBytes_AsStringAndSize(value, &vp, &vl) < 0)
-			throw std::runtime_error("Only dict[bytes,bytes] supported");
+			throw runtime_error("Only dict[bytes,bytes] supported");
 		size_t ksz = varint_size(kl);
 		size_t vsz = varint_size(vl);
 		items.push_back({kp, size_t(kl), vp, size_t(vl), ksz, vsz});
@@ -109,7 +107,7 @@ py::bytes serialize_fast32(py::dict dict) {
 	size_t total = 8;  // 8 bytes for entry count
 
 	struct IT { char* k; size_t kl; char* v; size_t vl; };
-	std::vector<IT> items;
+	vector<IT> items;
 	items.reserve(PyDict_Size(dict.ptr()));
 
 	// collect and size
@@ -117,7 +115,7 @@ py::bytes serialize_fast32(py::dict dict) {
 		char *kp, *vp; Py_ssize_t kl, vl;
 		if (PyBytes_AsStringAndSize(key, &kp, &kl) < 0 ||
 		    PyBytes_AsStringAndSize(value, &vp, &vl) < 0)
-			throw std::runtime_error("Only dict[bytes,bytes] supported");
+			throw runtime_error("Only dict[bytes,bytes] supported");
 		items.push_back({kp, size_t(kl), vp, size_t(vl)});
 		total += 4 + kl + 4 + vl;
 		++count;
@@ -173,31 +171,46 @@ py::dict deserialize_varint(py::bytes blob) {
 
 
 py::dict deserialize_fast32(py::bytes blob) {
-	py::buffer_info info(py::buffer(blob).request());
-	const char* ptr = static_cast<const char*>(info.ptr);
-	const char* end = ptr + info.size;
+	// raw buffer
+	auto info = py::buffer(blob).request();
+	auto ptr  = static_cast<const uint8_t*>(info.ptr);
 
-	uint64_t count = (uint64_t)read_u32_le(ptr)
-	               | (uint64_t(read_u32_le(ptr + 4)) << 32);
+	// считываем count
+	uint64_t count =
+		  uint64_t(*reinterpret_cast<const uint32_t*>(ptr))
+		| (uint64_t(*reinterpret_cast<const uint32_t*>(ptr + 4)) << 32);
 	ptr += 8;
 
-	py::dict result;
-	for (uint64_t i = 0; i < count; ++i) {
-		uint32_t kl = read_u32_le(ptr);
-		ptr += 4;
-		py::bytes key(ptr, (py::ssize_t)kl);
-		ptr += kl;
+    // pre-initialize
+	PyObject* raw = _PyDict_NewPresized(static_cast<Py_ssize_t>(count));
+	py::dict result = py::reinterpret_steal<py::dict>(py::handle(raw));
 
-		uint32_t vl = read_u32_le(ptr);
+	for (uint64_t i = 0; i < count; ++i) {
+		// key
+		uint32_t kl = *reinterpret_cast<const uint32_t*>(ptr);
 		ptr += 4;
-		py::bytes val(ptr, (py::ssize_t)vl);
+		PyObject* key = PyBytes_FromStringAndSize(nullptr, kl);
+		memcpy(PyBytes_AS_STRING(key), ptr, kl);
+		ptr += kl;
+		// compute hash
+		Py_hash_t h = PyObject_Hash(key);
+
+		// val
+		uint32_t vl = *reinterpret_cast<const uint32_t*>(ptr);
+		ptr += 4;
+		PyObject* val = PyBytes_FromStringAndSize(nullptr, vl);
+		memcpy(PyBytes_AS_STRING(val), ptr, vl);
 		ptr += vl;
 
-		result[key] = val;
+		// no re-hashing
+		_PyDict_SetItem_KnownHash(raw, key, val, h);
+
+		Py_DECREF(key);
+		Py_DECREF(val);
 	}
+
 	return result;
 }
-
 
 PYBIND11_MODULE(db_boosts, m) {
 	m.doc() = "c++ boosts for db";

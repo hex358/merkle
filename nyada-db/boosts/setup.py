@@ -8,7 +8,7 @@ ext_modules = [
         name="db_boosts",
         sources=["db_boosts.cpp"],
         #cxx_std=17,
-        include_dirs=[get_include()],
+        include_dirs=[get_include(), r"C:\Users\Mike\Desktop\портфолио\msgproof\.venv\py\main\nyada-db\boosts\bitsery\include"],
         #language="c++"
         extra_compile_args=[
             "/O2",
