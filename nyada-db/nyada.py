@@ -294,6 +294,7 @@ class StoredList(StoredObject):
         # placeholders for partial pages
         self.old_header = bytearray(self.HEADER_BYTE_COUNT)
         self.old_body = bytearray()
+        self.append = self._buffer.append
 
     def _map_stat(self, txn):
         """
