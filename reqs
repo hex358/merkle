@@ -2,3 +2,4 @@ sanic
 lmdb
 discord-py-interactions
 pybind11
+setuptools

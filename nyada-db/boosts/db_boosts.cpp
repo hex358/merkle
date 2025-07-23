@@ -6,15 +6,7 @@
 namespace py = pybind11;
 using namespace std;
 
-static inline size_t varint_size(uint64_t v) {
-	size_t sz = 0;
-	do { sz++; v >>= 7; } while (v);
-	return sz;
-}
 
-
-
-// fixed‑length helpers
 static inline void write_u32_le(uint32_t x, char* out) {
 	out[0] = char(x);
 	out[1] = char(x >> 8);
@@ -29,7 +21,6 @@ static inline void write_u64_le(uint64_t x, char* out) {
 
 
 
-// fixed-length (max speed)
 py::bytes serialize(py::dict dict) {
 	Py_ssize_t pos{};
 	PyObject *key, *value;
