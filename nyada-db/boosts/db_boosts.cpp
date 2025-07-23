@@ -3,9 +3,6 @@
 #include <Python.h>
 #include <pybind11/buffer_info.h>
 #include <vector>
-#include <iostream>
-#include <string>
-#include <chrono>
 namespace py = pybind11;
 using namespace std;
 
@@ -15,26 +12,7 @@ static inline size_t varint_size(uint64_t v) {
 	return sz;
 }
 
-static inline size_t encode_varint(uint64_t v, char* out) {
-	size_t i = 0;
-	while (v >= 0x80) {
-		out[i++] = static_cast<char>((v & 0x7F) | 0x80);
-		v >>= 7;
-	}
-	out[i++] = static_cast<char>(v);
-	return i;
-}
 
-static inline void decode_varint(const char*& ptr, const char* end, uint64_t& v) {
-	v = 0;
-	int shift = 0;
-	while (ptr < end) {
-		uint8_t byte = static_cast<uint8_t>(*ptr++);
-		v |= uint64_t(byte & 0x7F) << shift;
-		if (!(byte & 0x80)) break;
-		shift += 7;
-	}
-}
 
 // fixed‑length helpers
 static inline void write_u32_le(uint32_t x, char* out) {
@@ -51,56 +29,8 @@ static inline void write_u64_le(uint64_t x, char* out) {
 
 
 
-// varint-based
-py::bytes serialize_varint(py::dict dict) {
-	Py_ssize_t pos{};
-	PyObject *key, *value;
-	uint64_t count{};
-	size_t total{};
-
-	struct IT { char* k; size_t kl; char* v; size_t vl; size_t ksz; size_t vsz; };
-	vector<IT> items;
-	items.reserve(PyDict_Size(dict.ptr()));
-
-	// collect and size
-	while (PyDict_Next(dict.ptr(), &pos, &key, &value)) {
-		char *kp, *vp; Py_ssize_t kl, vl;
-		if (PyBytes_AsStringAndSize(key, &kp, &kl) < 0 ||
-		    PyBytes_AsStringAndSize(value, &vp, &vl) < 0)
-			throw runtime_error("Only dict[bytes,bytes] supported");
-		size_t ksz = varint_size(kl);
-		size_t vsz = varint_size(vl);
-		items.push_back({kp, size_t(kl), vp, size_t(vl), ksz, vsz});
-		total += ksz + kl + vsz + vl;
-		++count;
-	}
-	total += varint_size(count);
-
-	// allocate output buffer
-	PyObject* out_py = PyBytes_FromStringAndSize(nullptr, (Py_ssize_t)total);
-	char* out = PyBytes_AS_STRING(out_py);
-	char* p = out;
-
-	// write count
-	p += encode_varint(count, p);
-
-	// drop GIL for heavy writes
-	{
-		py::gil_scoped_release release;
-		for (auto &it : items) {
-			p += encode_varint(it.kl, p);
-			memcpy(p, it.k, it.kl);
-			p += it.kl;
-			p += encode_varint(it.vl, p);
-			memcpy(p, it.v, it.vl);
-			p += it.vl;
-		}
-	}
-	return py::reinterpret_steal<py::bytes>(py::handle(out_py));
-}
-
 // fixed-length (max speed)
-py::bytes serialize_fast32(py::dict dict) {
+py::bytes serialize(py::dict dict) {
 	Py_ssize_t pos{};
 	PyObject *key, *value;
 	uint64_t count{};
@@ -147,35 +77,13 @@ py::bytes serialize_fast32(py::dict dict) {
 	return py::reinterpret_steal<py::bytes>(py::handle(out_py));
 }
 
-// deserializer
-py::dict deserialize_varint(py::bytes blob) {
-	py::buffer_info info(py::buffer(blob).request());
-	const char* ptr = static_cast<const char*>(info.ptr);
-	const char* end = ptr + info.size;
-	uint64_t count;
-	decode_varint(ptr, end, count);
-
-	py::dict result;
-	for (uint64_t i = 0; i < count; ++i) {
-		uint64_t kl, vl;
-		decode_varint(ptr, end, kl);
-		py::bytes key(ptr, (py::ssize_t)kl);
-		ptr += kl;
-		decode_varint(ptr, end, vl);
-		py::bytes val(ptr, (py::ssize_t)vl);
-		ptr += vl;
-	    result[key] = val;
-	}
-	return result;
-}
 
 
-py::dict deserialize_fast32(py::bytes blob) {
+py::dict deserialize(py::bytes blob) {
 	// raw buffer
 	auto info = py::buffer(blob).request();
 	auto ptr  = static_cast<const uint8_t*>(info.ptr);
 
-	// считываем count
 	uint64_t count =
 		  uint64_t(*reinterpret_cast<const uint32_t*>(ptr))
 		| (uint64_t(*reinterpret_cast<const uint32_t*>(ptr + 4)) << 32);
@@ -212,11 +120,34 @@ py::dict deserialize_fast32(py::bytes blob) {
 	return result;
 }
 
+py::bytes bucket(py::bytes bytes_obj, size_t num_buckets) {
+	auto info = py::buffer(bytes_obj).request();
+	const uint8_t* data = static_cast<const uint8_t*>(info.ptr);
+	size_t len = info.size;
 
+	// djb2 initialization
+	uint64_t h = 5381;
+	// compute djb2 hash: h = h * 33 + c
+	for (size_t i = 0; i < len; ++i) {
+		h = (h << 5) + h + data[i];
+	}
+
+	// bucket index
+	uint64_t idx = h % num_buckets;
+
+	// little-endian
+	char out[8];
+	for (int i = 0; i < 8; ++i) {
+		out[i] = static_cast<char>((idx >> (i * 8)) & 0xFF);
+	}
+
+	return py::bytes(out, 8);
+}
+
+using namespace pybind11::literals;
 PYBIND11_MODULE(db_boosts, m) {
 	m.doc() = "c++ boosts for db";
-	m.def("serialize_varint", &serialize_varint, "Compact varint mode");
-	m.def("serialize_fast32", &serialize_fast32, "Fixed‑length mode (4B lengths + 8B count)");
-	m.def("deserialize_varint", &deserialize_varint, "Deserialize varint blobs");
-	m.def("deserialize_fast32", &deserialize_fast32, "Deserialize fixed-length blobs");
+	m.def("serialize", &serialize, "Fixed‑length serialization (4B lengths + 8B count)");
+	m.def("deserialize", &deserialize, "Deserialize fixed-length blobs");
+	m.def("bucket", &bucket, "DJB2 bucketing implementation");
 }

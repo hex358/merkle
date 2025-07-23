@@ -1,13 +1,10 @@
 nyada-db/*
 !nyada-db/nyada.py
-!nyada-db/db-boosts
 
-nyada-db/db-boosts/*
-!nyada-db/db-boosts/db_boosts.cpp
-!nyada-db/db-boosts/setup.py
+!nyada-db/db_boosts.cpp
+!nyada-db/setup.py
+!nyada-db/boosts
 
-nyada-db/db-boosts/__pycache__/*
-nyada-db/db-boosts/__pycache__
 
 nyada-db/__pycache__
 nyada-db/__pycache__/*
