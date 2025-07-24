@@ -327,7 +327,7 @@ class StoredList(StoredObject):
         body_chunks = []
 
         # if there's an in-mem partial page, reload it
-        if self.old_header:
+        if self.old_body:
             # old_header is a bytearray of length (batch_size+1)*byte_len
             header_arr = array('Q')
             header_arr.frombytes(self.old_header)
@@ -338,6 +338,7 @@ class StoredList(StoredObject):
             running = 0
             # if we’re starting mid-page, fetch existing page
             if offset_in_page:
+
                 with self.env.begin(db=self._db, write=False, buffers=True) as txn:
                     raw = txn.get(int_pack(page)) or b''
                 # split header / body out of raw
@@ -348,11 +349,13 @@ class StoredList(StoredObject):
                 header_arr.frombytes(hdr_bytes)
                 body_chunks = [body_bytes]
                 running = header_arr[offset_in_page]
+
         slot = offset_in_page
         idx = self._persisted_len
 
         for v in self._buffer:
             # mark start-offset for this slot
+
             header_arr[slot] = running
             body_chunks.append(v)
             running += len(v)
@@ -600,7 +603,7 @@ class StoredList(StoredObject):
         """
         cursor = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
         cursor_index = 0
-        for i in range(len(self)):
+        for i in range(self._persisted_len):
             if i in self._cache:
                 # if index in cached, read corresp.val from your cache
                 yield self._cache[i]
@@ -608,7 +611,7 @@ class StoredList(StoredObject):
                 # otherwise, iter on cursor
                 n = i - cursor_index
                 v = None
-                if n != 1 and cursor_index > 0:
+                if n > 1:
                     for j in range(n):
                         cursor_index += 1
                         v = next(cursor)
@@ -623,10 +626,9 @@ class StoredList(StoredObject):
         """
         Batched iteration over blobs
         """
-        if self._buffer: raise Exception("Flush buffer before iterating")
         iterate = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
         blob = None; last_cursor_pos = 0
-        for i in range(len(self)):
+        for i in range(self._persisted_len):
             if i in self._cache: yield self._cache[i]
             slot = i % self.batch_size
 
@@ -642,7 +644,7 @@ class StoredList(StoredObject):
                 else:
                     # otherwise, like usual
                     iters = n - last_cursor_pos
-                    if iters != 1 and last_cursor_pos > 0:
+                    if iters > 1:
                         for j in range(iters):
                             last_cursor_pos += 1
                             blob = next(iterate)
@@ -656,7 +658,7 @@ class StoredList(StoredObject):
                     offsets = struct.unpack(self.pack_format, hdr_view)
 
             # simply increment by length if it's constant, otherwise look into header
-            new_right = right + self.max_length if self.constant_length else offsets[slot]
+            new_right = right + self.max_length if self.constant_length else offsets[slot+1]
             left, right = right, new_right
             if self.constant_length:
                 # no header bytes
