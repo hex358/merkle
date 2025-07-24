@@ -1,5 +1,11 @@
-# Nyada 1.0.0
-# Speed benchmark
+# MerkleDB 1.0.0
+#
+# StoredList speed benchmark (Intel Core i7 Windows 11)
+#        batch=False   batch=True    constant_length=True
+# write  2.8 Mil/s     6-8.0 Mil/s   50-110.0 Mil/s
+# iter   2.8 Mil/s     3.3-4 Mil/s   6.2 Mil/s
+# GET    500 K/s       .9-1.9 Mil/s  1.3-1.9 Mil/s
+# SET    2.1 M/s       4-5.5 Mil/s   6.2-8 Mil/s
 
 import os
 import struct
@@ -213,7 +219,7 @@ class StoredObject:
 
     def _flush_buffer(self):
         """
-        Hook for subclasses to flush their buffers
+        for subclasses to flush their buffers
         """
         pass
 
@@ -274,6 +280,7 @@ class StoredList(StoredObject):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.fetched_headers = {}
         name = kwargs["name"]
         self._batched_writes = {}
         # initialize lmdb db, buffer and cache
@@ -285,7 +292,7 @@ class StoredList(StoredObject):
         self._buffer = []  # pending appends to flush_buffer
         self._cache = {}  # in-memory read cache
         self._index_buffer = {}
-        self.append = self._buffer.append
+        self.append = self._buffer.append if not self.cache_on_set else self.cached_append
         self.buffer_batches = {}
 
         self.old_header = bytearray(self.HEADER_BYTE_COUNT)  # zero-filled
@@ -363,6 +370,10 @@ class StoredList(StoredObject):
         self.old_header = bytearray(header_arr.tobytes())
         self.old_body = bytearray().join(body_chunks)
 
+    def cached_append(self, value: bytes):
+        self._cache[len(self)] = value
+        self._buffer.append(value)
+
     def _puts_gen_single(self):
         # usual yield
         idx = self._persisted_len
@@ -426,13 +437,7 @@ class StoredList(StoredObject):
 
             if self.constant_length:
                 # fixed-size slots, just overwrite the slice
-                bl = self.max_length
-                chunk = bytearray(blob)
-                for slot, v in assigns.items():
-                    if len(v) != bl:
-                        raise ValueError(f"slot {slot}: expected length {bl}, got {len(v)}")
-                    start = slot * bl
-                    chunk[start:start+bl] = v
+                chunk = db_boosts.patch_constant_length((blob), assigns, self.max_length)
             else:
                 # variable-length: rebuild header + body
                 header = blob[:hdr_bytes]
@@ -471,8 +476,8 @@ class StoredList(StoredObject):
         total = len(self._buffer) + self._persisted_len
         with self.env.begin(write=True, db=self._db, buffers=True) as txn:
             cursor = txn.cursor()
-            args = (self._persisted_len, self._buffer) #()
-            call = db_boosts.gen_puts_single # self._puts_gen_single
+            args = ()
+            call = self._puts_gen_single
             if self.do_batch_writes:
                 if self.constant_length:
                     call = self._puts_gen_constant; args = ()
@@ -514,13 +519,11 @@ class StoredList(StoredObject):
         if self.do_batch_writes:
             # figure page and slot
             page, slot = divmod(index, self.batch_size)
-            #print(page)
             key = StoredList.int_pack(page)
         else:
             key = StoredList.int_pack(index)
 
         # fetch the packed page
-
         if not self.do_batch_writes:
             with self.env.begin(db=self._db, write=False, buffers=True) as txn:
                 blob = txn.get(key)
@@ -530,6 +533,7 @@ class StoredList(StoredObject):
             self.fetched_blobs[key] = blob
         else:
             blob = self.fetched_blobs[key]
+            #print(len(blob))
 
         if blob is None: raise IndexError(f"{index} out of range")
 
@@ -539,12 +543,14 @@ class StoredList(StoredObject):
             value = blob[slot * self.max_length : (slot+1) * self.max_length]
         else:
             # array of unsigned offsets
-            hdr_view = blob[:self.HEADER_BYTE_COUNT]
-            offsets = struct.unpack(self.pack_format, hdr_view)
+            if not key in self.fetched_headers:
+                hdr_view = blob[:self.HEADER_BYTE_COUNT]
+                offsets = struct.unpack(self.pack_format, hdr_view)
+                self.fetched_headers[key] = offsets
+            else:
+                offsets = self.fetched_headers[key]
             start, end = offsets[slot], offsets[slot+1]
-
-            body_offset = self.HEADER_BYTE_COUNT
-            value = blob[body_offset + start : body_offset + end]
+            value = blob[self.HEADER_BYTE_COUNT + start : self.HEADER_BYTE_COUNT + end]
 
         if self.cache_on_set:
             self._cache[index] = value

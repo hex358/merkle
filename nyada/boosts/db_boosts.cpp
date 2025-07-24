@@ -1,11 +1,16 @@
+#include <Python.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
-#include <coroutine>
 #include <pybind11/stl.h>
-#include <Python.h>
 #include <pybind11/buffer_info.h>
 #include <vector>
+#include <string>
+#include <unordered_map>
+#include <cstdint>
+#include <cstring>
+#include <stdexcept>
 namespace py = pybind11;
+
 
 
 static inline void write_u32_le(uint32_t x, char* out) {
@@ -138,14 +143,46 @@ py::bytes pack_index(uint64_t idx) {
     return py::bytes(reinterpret_cast<const char*>(&idx),
                      sizeof(idx));};
 
-py::generator<py::tuple> gen_puts_single( uint64_t persisted_len, py::iterable buffer) {
-    uint64_t idx = persisted_len;
-    for (auto item_obj : buffer) {
-        // cast each element to bytes
-        py::bytes v = py::bytes(item_obj);
-        co_yield py::make_tuple(pack_index(idx++), v);
+static py::bytearray patch_constant_length(const py::buffer &blob_buf,
+                                           const py::dict &assigns,
+                                           size_t bl)
+{
+    auto info = blob_buf.request();
+    if (info.ndim != 1)
+        throw std::runtime_error("patch_constant_length: only 1D buffers supported");
+    size_t total = info.size;
+    const char *src = static_cast<const char*>(info.ptr);
+
+    PyObject *ba = PyByteArray_FromStringAndSize(nullptr, total);
+    if (!ba) throw std::bad_alloc();
+    char *dst = PyByteArray_AS_STRING(reinterpret_cast<PyByteArrayObject*>(ba));
+    std::memcpy(dst, src, total);
+
+    for (auto it = assigns.begin(); it != assigns.end(); ++it) {
+        py::handle key_h = it->first;
+        py::handle val_h = it->second;
+
+        size_t slot = py::cast<size_t>(key_h);
+
+        py::object vobj = py::reinterpret_borrow<py::object>(val_h);
+        py::buffer  vbuf(vobj);
+        auto vinfo = vbuf.request();
+
+        if (vinfo.ndim != 1 || (size_t)vinfo.size != bl)
+            throw std::runtime_error(
+                "patch_constant_length: slot " + std::to_string(slot) +
+                " must be exactly " + std::to_string(bl) + " bytes"
+            );
+
+        size_t start = slot * bl;
+        if (start + bl > total)
+            throw std::out_of_range("write past end of blob");
+
+        std::memcpy(dst + start, vinfo.ptr, bl);
     }
-};
+
+    return py::reinterpret_steal<py::bytearray>(py::handle(ba));
+}
 
 using namespace pybind11::literals;
 PYBIND11_MODULE(db_boosts, m) {
@@ -153,5 +190,8 @@ PYBIND11_MODULE(db_boosts, m) {
 	m.def("serialize", &serialize, "Fixed‑length serialization (4B lengths + 8B count)");
 	m.def("deserialize", &deserialize, "Deserialize fixed-length blobs");
 	m.def("bucket", &bucket, "DJB2 bucketing implementation");
-	m.def("gen_puts_single", &gen_puts_single, "gen puts");
+    m.def("patch_constant_length",
+    &patch_constant_length,
+    "Overwrite fixed-size slots in a blob (constant_length branch)");
 }
+
