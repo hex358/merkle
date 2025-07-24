@@ -1,15 +1,16 @@
-nyada/*
-!nyada/nyada.py
+database/*
+!database/interface.py
+!database/connection.py
 
-!nyada/boosts/db_boosts.cpp
-!nyada/boosts/setup.py
-!nyada/boosts
+!database/boosts/db_boosts.cpp
+!database/boosts/setup.py
+!database/boosts
 
 
-nyada/__pycache__
-nyada/__pycache__/*
-nyada/boosts/__pycache__/*
-nyada/boosts/__pycache__
+database/__pycache__
+database/__pycache__/*
+database/boosts/__pycache__/*
+database/boosts/__pycache__
 
 /__pycache__
 /__pycache__/*

@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: db_boosts
+Version: 1.0.0
+Summary: c++ speedups for python database
+Author: hex358
+Dynamic: author
+Dynamic: summary
