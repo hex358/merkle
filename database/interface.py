@@ -2,13 +2,13 @@
 #
 # StoredList flush
 #        batch=False   batch=True    constant_length=True
-# append 2.8 Mil/s     6-8.0 Mil/s   52-110 Mil/s
+# append 2.8 Mil/s     7-8.0 Mil/s   35-110 Mil/s
 # insert 2.1 Mil/      4-5.5 Mil/s   6.2-8 Mil/s
 #
 # StoredList read
 #        batch=False   batch=True    constant_length=True
-# query  2.8 Mil/s     3.3-4 Mil/s   6.2 Mil/s
-# get    0.5 Mil/s     0.9-1.9 Mil/s 1.3-1.9 Mil/s
+# query  2.8 Mil/s     3-4 Mil/s     6.2 Mil/s
+# get    0.6 Mil/s     1-1.9 Mil/s   1.3-1.9 Mil/s
 
 import os
 import struct
@@ -311,79 +311,86 @@ class StoredList(StoredObject):
         self.old_body = bytearray()
         #self._zero_header = bytearray(self.HEADER_BYTE_COUNT)
         self.fetched_blobs = {}
-
+        self.leftover = []
 
     def _puts_gen_batched(self):
         int_pack = StoredList.int_pack
         batch_size = self.batch_size
         byte_len = self.byte_length
 
-        # where we left off
+        # figure out which page and slot we're starting in
         page = self._persisted_len // batch_size
+        initial_page = page
+        self.last_page = initial_page
         offset_in_page = self._persisted_len % batch_size
 
-        # prepare header array (batch_size+1 slots: start offsets + final end offset)
-        header_arr = array('Q', [0] * (batch_size + 1))
-        body_chunks = []
-
-        # if there's an in-mem partial page, reload it
+        # start with either an existing partial in-mem or load it from disk
         if self.old_body:
-            # old_header is a bytearray of length (batch_size+1)*byte_len
             header_arr = array('Q')
             header_arr.frombytes(self.old_header)
-            # old_body is a bytearray of existing data
             body_chunks = [bytes(self.old_body)]
             running = header_arr[offset_in_page]
         else:
-            running = 0
-            # if we’re starting mid-page, fetch existing page
+            header_arr = array('Q', [0] * (batch_size + 1))
+            body_chunks = []
             if offset_in_page:
-
-                with self.env.begin(db=self._db, write=False, buffers=True) as txn:
+                # load the on-disk partial page so we can append to it
+                with self.env.begin(db=self._db, write=False) as txn:
                     raw = txn.get(int_pack(page)) or b''
-                # split header / body out of raw
-                hdr_bytes = raw[: byte_len * (batch_size + 1)]
-                body_bytes = raw[byte_len * (batch_size + 1):
-                                 byte_len * (batch_size + 1) + offset_in_page * byte_len]
+                hdr_size = byte_len * (batch_size + 1)
+                hdr_bytes = raw[:hdr_size]
+                body_bytes = raw[hdr_size: hdr_size + offset_in_page * byte_len]
+
                 header_arr = array('Q')
                 header_arr.frombytes(hdr_bytes)
                 body_chunks = [body_bytes]
                 running = header_arr[offset_in_page]
+            else:
+                running = 0
 
         slot = offset_in_page
-        idx = self._persisted_len
 
+        # consume the in-memory buffer
         for v in self._buffer:
-            # mark start-offset for this slot
-
             header_arr[slot] = running
             body_chunks.append(v)
             running += len(v)
-
             slot += 1
-            idx += 1
 
-            # once we've filled batch_size items, flush
+            # once we fill a full page, emit or stash it
             if slot == batch_size:
                 header_arr[batch_size] = running
                 data = header_arr.tobytes() + b''.join(body_chunks)
-                yield (int_pack(page), memoryview(data))
+
+                cur_page = page
+                to_yield = (int_pack(cur_page), memoryview(data))
+                if cur_page > initial_page:
+                    yield to_yield
+                else:
+                    self.leftover.append(to_yield)
 
                 # reset for next page
                 page += 1
+                header_arr = array('Q', [0] * (batch_size + 1))
+                body_chunks = []
                 slot = 0
                 running = 0
-                body_chunks.clear()
 
         # flush any remaining partial page
-        if slot != offset_in_page:
+        if body_chunks:
             header_arr[slot] = running
             data = header_arr.tobytes() + b''.join(body_chunks)
-            yield (int_pack(page), memoryview(data))
 
-        # save header/body for next invocation
-        self.old_header = bytearray(header_arr.tobytes())
-        self.old_body = bytearray().join(body_chunks)
+            cur_page = page
+            to_yield = (int_pack(cur_page), memoryview(data))
+            if cur_page > initial_page:
+                yield to_yield
+            else:
+                self.leftover.append(to_yield)
+
+            # preserve for the next call
+            self.old_header = bytearray(header_arr.tobytes())
+            self.old_body = bytearray().join(body_chunks)
 
     def cached_append(self, value: bytes):
         self._cache[len(self)] = value
@@ -404,7 +411,7 @@ class StoredList(StoredObject):
         start_page = self._persisted_len // bs
         start_off = self._persisted_len % bs
 
-        # load any existing partial‐page bytes
+        # load any existing tail‐bytes
         if self.old_body:
             old_bytes = bytes(self.old_body)
         elif start_off:
@@ -419,24 +426,41 @@ class StoredList(StoredObject):
         total_pages = (total_items + bs - 1) // bs
         if total_items == start_off and not buf:
             return
-        # stream out each page
+
+        # we'll reassign at the end if the last page is partial
+        new_old_body = None
+
         for p in range(total_pages):
             page = start_page + p
             gstart = p * bs
             gend = min(gstart + bs, total_items)
 
-            # slice of new‐buffer for this page
+            # local slice of buffer for this page
             bstart = max(0, gstart - start_off)
             bend = gend - start_off
 
             if p == 0 and start_off:
-                # first page: prefix whatever was left over
                 chunk = old_bytes + b''.join(buf[:bend])
             else:
-                # subsequent pages: only join the new records
                 chunk = b''.join(buf[bstart:bend])
-            # print(page)
-            yield int_pack(page), memoryview(chunk)
+
+            # remember if we ended on a partial page
+            if (p == total_pages - 1) and (gend - gstart < bs):
+                new_old_body = chunk
+
+            key = int_pack(page)
+            mv = memoryview(chunk)
+
+            if (page > start_page) or (p == 0 and start_off == 0):
+                yield key, mv
+            else:
+                self.leftover.append((key, mv))
+
+        # persist the new partial tail if any
+        if new_old_body is not None:
+            self.old_body = bytearray(new_old_body)
+        else:
+            self.old_body = None
 
     def _sets_gen(self):
         for idx, value in self._index_buffer.items():
@@ -499,6 +523,9 @@ class StoredList(StoredObject):
                 else:
                     call = self._puts_gen_batched; args = ()
             cursor.putmulti(append=True, items=call(*args))
+            if self.leftover:
+                cursor.putmulti(append=False, items=self.leftover)
+                self.leftover.clear()
 
             call_sets = self._sets_gen
             if self.do_batch_writes:

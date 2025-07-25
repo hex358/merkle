@@ -194,4 +194,3 @@ PYBIND11_MODULE(db_boosts, m) {
     &patch_constant_length,
     "Overwrite fixed-size slots in a blob (constant_length branch)");
 }
-
