@@ -71,7 +71,11 @@ class StoredReference:
         """
         Retrieves stored object by name
         """
-        return StoredReference.references[name]
+        if 1:#name in StoredReference.references:
+            return StoredReference.references[name]
+        else:
+            pickled = b""
+            #return StoredReference.references.setdefault(name,
 
     def __init__(self, name: bytes):
         """
@@ -603,9 +607,10 @@ class StoredList(StoredObject):
         length = len(self)
         if index < 0:
             index += length
+        print(length)
 
         if not 0 <= index < length:
-            raise IndexError("assignment index out of range")
+            raise IndexError(f"assignment {index} index out of range")
 
         if index >= self._persisted_len:
             # if in active buffer space, write into it

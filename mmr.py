@@ -1,13 +1,19 @@
 import hashlib
 from collections import defaultdict
 from typing import List, Dict, Optional, Tuple, Any
+from database.interface import StoredDict, StoredList, StoredReference, BatchingConfig
 
 # Merkle-Mountain-Range (mmr) data structures
-node_hashes: list[int, bytes] = []                      # append-only list of node hashes
-node_hash_indexes: Dict[bytes, int] = defaultdict(list)  # map node-hash to its positions
-internal_nodes_by_height: Dict[int, Dict[int, bytes]] = {}    # map level->(start_index->subtree-root)
-peaks: List[Optional[bytes]] = []                   # current peak roots by height
-peaks_start: List[Optional[int]] = []               # start index of each peak in node_hashes
+# append-only list of node hashes
+node_hashes: list[int, bytes] = StoredList(name=b"node_hashes", batching_config=BatchingConfig(512, True, 16))
+# map node-hash to its position
+node_hash_indexes: Dict[bytes, int] = StoredDict(name=b"node_hash_indexes", batching_config=BatchingConfig(512))
+# map level->(start_index->subtree-root)
+internal_nodes_by_height: Dict[int, Dict[int, bytes]] = {}
+# current peak roots by height
+peaks: List[Optional[bytes]] = []
+# start index of each peak in node_hashes
+peaks_start: List[Optional[int]] = StoredList(name=b"node_hashes", batching_config=BatchingConfig(512, True, 16))
 
 # hashing function using blake2b for faster digests
 def kief(data: bytes) -> bytes:
@@ -205,10 +211,3 @@ for i in range(2**20-1):
 
 print(sum(len(node) for node in internal_nodes_by_height.values()))
 
-#from random import randint
-#print(timeit.timeit(stmt="add(('i'+str(randint(0,100))).encode('utf-8'))", number=100, globals=globals()))
-
-t = perf_counter()
-proof = server_check(b"5")
-print(client_check(proof))
-print(perf_counter() - t)
