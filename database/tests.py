@@ -1,22 +1,11 @@
 from interface import *
 from time import perf_counter
 
-
-check = StoredList(name=b"dict", batching_config=BatchingConfig(batch_size=512,constant_length=1, max_item_length=6)
-                   )
-
-
-import struct
-for i in range(1000000):
-    check.append(struct.pack(">d", 2.0))
-
-t = perf_counter()
-check.flush_buffer()
-print(perf_counter() - t)
-
-
-t = perf_counter()
-for i in check:
-    pass
-
-print(perf_counter() - t)
+a = StoredReference.from_reference(b"node_hashes")
+#a = StoredDict(name=b"node_hashes", batching_config=BatchingConfig(512))
+# for i in range(5):
+# 	a[i.to_bytes()] = b"ff"
+# a.flush_buffer()
+for i in a.iterate():
+	print(i)
+#print(StoredReference.from_reference(b"node_hashes"))

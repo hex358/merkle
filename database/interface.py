@@ -12,6 +12,7 @@
 
 import os
 import struct
+import threading
 import lmdb
 from threading import Thread
 import db_boosts
@@ -58,30 +59,57 @@ default_batching_config = BatchingConfig(batch_size=0, constant_length=False, ma
 
 class StoredReference:
     references = {}
+    _lock = threading.RLock()
 
     @staticmethod
     def register(instance: "StoredObject"):
-        """
-        Registers instance in references dictionary
-        """
         StoredReference.references[instance.name] = instance
 
     @staticmethod
     def from_reference(name: bytes) -> "StoredObject":
-        """
-        Retrieves stored object by name
-        """
-        if 1:#name in StoredReference.references:
-            return StoredReference.references[name]
-        else:
-            pickled = b""
-            #return StoredReference.references.setdefault(name,
+        # fast path
+        inst = StoredReference.references.get(name)
+        if inst is not None:
+            return inst
 
-    def __init__(self, name: bytes):
-        """
-        Initializes stored reference with name
-        """
-        self.name = name
+        # slow path: try to re-open from __stat without creating anything new
+        with StoredReference._lock:
+            inst = StoredReference.references.get(name)
+            if inst is not None:
+                return inst
+
+            try:
+                stat_db = env.open_db(name + b"__stat", create=False)
+            except lmdb.Error as e:
+                raise KeyError(f"StoredObject {name!r} not found (no __stat db)") from e
+
+            with env.begin(db=stat_db, write=False) as txn:
+                t  = txn.get(b"type")  # b"1" => StoredList, b"2" => StoredDict
+                if t is None:
+                    raise KeyError(f"StoredObject {name!r} missing 'type' in __stat")
+
+                bw = int(txn.get(b"batch_writes") or b"0") == 1
+                bs = int(txn.get(b"bs") or b"0")
+                ml = int(txn.get(b"ml") or b"0")
+                cl = int(txn.get(b"cl") or b"0") == 1
+
+            cfg = BatchingConfig(
+                batch_size=bs,
+                constant_length=cl,
+                max_item_length=ml,
+                on=bw
+            )
+
+            if t == b"1":
+                inst = StoredList(name=name, env=env, batching_config=cfg)
+            elif t == b"2":
+                inst = StoredDict(name=name, env=env, batching_config=cfg)
+            else:
+                raise KeyError(f"Unknown stored type {t!r} for {name!r}")
+
+            # StoredObject.__init__ will register it, but be explicit:
+            StoredReference.register(inst)
+            return inst
 
 
 class Types:
@@ -192,6 +220,12 @@ class StoredObject:
         self.pack_format = f"={self.batch_size + 1}Q"
 
         self.map_stat()
+
+        self.write_stat(b"batch_writes", b"1" if self.do_batch_writes else b"0")
+        self.write_stat(b"bs", str(self.batch_size).encode("ascii"))
+        self.write_stat(b"ml", str(self.max_length).encode("ascii"))
+        self.write_stat(b"cl", b"1" if self.constant_length else b"0")
+        StoredReference.register(self)
 
     def _map_stat(self, txn):
         """
@@ -549,7 +583,6 @@ class StoredList(StoredObject):
         # total items including buffered
         return self._persisted_len + len(self._buffer)
 
-
     def __getitem__(self, index: int) -> str:
         # support negative and cached reads
         length = len(self)
@@ -579,7 +612,6 @@ class StoredList(StoredObject):
             self.fetched_blobs[key] = blob
         else:
             blob = self.fetched_blobs[key]
-            #print(len(blob))
 
         if blob is None: raise IndexError(f"{index} out of range")
 
@@ -607,7 +639,6 @@ class StoredList(StoredObject):
         length = len(self)
         if index < 0:
             index += length
-        print(length)
 
         if not 0 <= index < length:
             raise IndexError(f"assignment {index} index out of range")
@@ -732,6 +763,7 @@ class StoredDict(StoredObject):
         self._cache = {}
         self.absent = set()
         self.fetched_buckets = {}
+        self._buffer = []  # pending appends to flush_buffer
         self._put_buckets = {}
         self._delete_buckets = {}
 
@@ -755,7 +787,7 @@ class StoredDict(StoredObject):
             else: self._put_buckets[bucket][key] = value
             if bucket in self.fetched_buckets: self.fetched_buckets[bucket][key] = value
 
-    def __getitem__(self, key: bytes) -> bytes:
+    def __getitem__(self, key: bytes | list) -> bytes | list[bytes]:
         """
         Retrieves value for key from cache or LMDB
         """
@@ -838,6 +870,19 @@ class StoredDict(StoredObject):
             yield bucket, db_boosts.serialize(base)
 
 
+    def setdefault(self, key: bytes, default: bytes) -> bytes:
+        """
+        if key exists, return its value
+        otherwise insert key with default and return default
+        """
+        try:
+            return self.__getitem__(key)
+        except KeyError:
+            # only if not present, write it once
+            self.__setitem__(key, default)
+            return default
+
+
     def _flush_buffer(self) -> None:
         """
         Applies buffered sets and deletes to LMDB
@@ -878,7 +923,7 @@ class StoredDict(StoredObject):
         Both keys and values will be returned in batched dicts.
         """
         if self.do_batch_writes:
-            if self._buffer: raise Exception("Flush buffer before iterating")
+          #  if self._buffer: raise Exception("Flush buffer before iterating")
             with self.env.begin(db=self._db, write=False) as txn:
                 for bucket, raw in txn.cursor().iternext(keys=True, values=True):
                     base = self.fetched_buckets.get(bucket)
