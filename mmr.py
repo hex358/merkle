@@ -234,7 +234,7 @@ def server_check(blob: bytes) -> Dict[str, Any]:
 		"global_root": get_global_root(),
 	}
 
-def client_check(bundle: Dict[str, Any]) -> bool:
+def client_check(bundle: Dict[str, Any]) -> bool: # placeholder, move to client module later
 	if bundle.get("status") != 1:
 		return False
 
@@ -267,7 +267,7 @@ def client_check(bundle: Dict[str, Any]) -> bool:
 from time import perf_counter
 
 if __name__ == "__main__":
-	t = perf_counter()
+	# t = perf_counter()
 	# for i in range(50000):
 	# 	add(str(i).encode("utf-8"))
 	# for i in to_flush:

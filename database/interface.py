@@ -1,14 +1,4 @@
-# DB for Merkle 1.0.0
-#
-# StoredList flush
-#        batch=False   batch=True    constant_length=True
-# append 2.8 Mil/s     7-8.0 Mil/s   35-110 Mil/s
-# insert 2.1 Mil/      4-5.5 Mil/s   6.2-8 Mil/s
-#
-# StoredList read
-#        batch=False   batch=True    constant_length=True
-# query  2.8 Mil/s     3-4 Mil/s     6.2 Mil/s
-# get    0.6 Mil/s     1-1.9 Mil/s   1.3-1.9 Mil/s
+# AlbertoDB 1.0.0
 
 import os
 import struct
@@ -17,6 +7,7 @@ import lmdb
 from threading import Thread
 import db_boosts
 from dataclasses import dataclass
+
 
 if not os.path.isdir(".db"):
     # create database directory if it does not exist
@@ -41,8 +32,11 @@ def open_environment(name: str,
         sync=lock_safe
     )
 
+global_env = None
 
-env = open_environment("db", 4096, False)  # initialize global env (1 GiB)
+def Start(*args, **kwargs):
+    global global_env
+    global_env = open_environment(*args, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -65,6 +59,10 @@ class StoredReference:
     def register(instance: "StoredObject"):
         StoredReference.references[instance.name] = instance
 
+    def __init__(self, instance: "StoredObject"):
+        self.name = instance.name
+        StoredReference.references[instance.name] = instance
+
     @staticmethod
     def from_reference(name: bytes) -> "StoredObject":
         # fast path
@@ -79,7 +77,7 @@ class StoredReference:
                 return inst
 
             try:
-                stat_db = env.open_db(name + b"__stat", create=False)
+                stat_db = self.env.open_db(name + b"__stat", create=False)
             except lmdb.Error as e:
                 raise KeyError(f"StoredObject {name!r} not found (no __stat db)") from e
 
@@ -101,9 +99,9 @@ class StoredReference:
             )
 
             if t == b"1":
-                inst = StoredList(name=name, env=env, batching_config=cfg)
+                inst = StoredList(name=name, env=global_env, batching_config=cfg)
             elif t == b"2":
-                inst = StoredDict(name=name, env=env, batching_config=cfg)
+                inst = StoredDict(name=name, env=global_env, batching_config=cfg)
             else:
                 raise KeyError(f"Unknown stored type {t!r} for {name!r}")
 
@@ -181,7 +179,7 @@ class StoredObject:
 
     def __init__(self,
                  name: bytes,                    # Name bytestring.
-                 env=env,                        # - Custom environment. Global one as default.
+                 env=None,                        # - Custom environment. Global one as default.
                  cache_on_set: bool = False,     # - Cache on __setitem__ calls. Will slow down
                                                  # the SETs, and speed up the GETs.
                  batching_config: BatchingConfig = default_batching_config
@@ -191,14 +189,15 @@ class StoredObject:
         """
         Initializes StoredObject with configuration parameters
         """
+        if env is None: env = global_env
         if not batching_config.on:
             batching_config = default_batching_config
         assert name, "Name must be a non-empty bytestring"
+        self.env = env
 
         self.name = name
-        self.stat = env.open_db(name + b"__stat", create=True)
+        self.stat = self.env.open_db(name + b"__stat", create=True)
 
-        self.env = env
         self.cache_on_set = cache_on_set
         self.do_batch_writes = bool(batching_config.batch_size)
         self.batch_size = batching_config.batch_size
@@ -334,7 +333,7 @@ class StoredList(StoredObject):
         name = kwargs["name"]
         self._batched_writes = {}
         # initialize lmdb db, buffer and cache
-        self._db = env.open_db(name, create=True, integerkey=True)
+        self._db = self.env.open_db(name, create=True, integerkey=True)
         if not self.do_batch_writes:
             with self.env.begin(db=self._db) as txn:
                 self._persisted_len = int(txn.stat(db=self._db)["entries"])
@@ -403,7 +402,7 @@ class StoredList(StoredObject):
                 cur_page = page
                 to_yield = (int_pack(cur_page), memoryview(data))
                 if cur_page > initial_page:
-                    yield to_yield
+                    yield memoryview(to_yield)
                 else:
                     self.leftover.append(to_yield)
 
@@ -422,7 +421,7 @@ class StoredList(StoredObject):
             cur_page = page
             to_yield = (int_pack(cur_page), memoryview(data))
             if cur_page > initial_page:
-                yield to_yield
+                yield memoryview(to_yield)
             else:
                 self.leftover.append(to_yield)
 
@@ -560,9 +559,9 @@ class StoredList(StoredObject):
                     call = self._puts_gen_constant; args = ()
                 else:
                     call = self._puts_gen_batched; args = ()
-            cursor.putmulti(append=True, items=call(*args))
+            cursor.putmulti(append=True, items=call(*args), reserve="hi")
             if self.leftover:
-                cursor.putmulti(append=False, items=self.leftover)
+                cursor.putmulti(append=False, items=self.leftover, reserve=True)
                 self.leftover.clear()
 
             call_sets = self._sets_gen
@@ -571,7 +570,7 @@ class StoredList(StoredObject):
 
             self.get_results = cursor.getmulti(self._batched_writes.keys())
 
-            cursor.putmulti(items=call_sets())
+            cursor.putmulti(items=call_sets(), reserve=True)
 
         if self.do_batch_writes:
             self.write_stat(key=b"length", value=str(total).encode("ascii"))
@@ -664,7 +663,7 @@ class StoredList(StoredObject):
         """
         Simple, unbatched iteration
         """
-        cursor = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
+        cursor = self.env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
         cursor_index = 0
         for i in range(self._persisted_len):
             if i in self._cache:
@@ -689,7 +688,7 @@ class StoredList(StoredObject):
         """
         Batched iteration over blobs
         """
-        iterate = env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
+        iterate = self.env.begin(db=self._db, write=False).cursor(db=self._db).iternext(keys=False, values=True)
         blob = None; last_cursor_pos = 0
         for i in range(self._persisted_len):
             if i in self._cache: yield self._cache[i]
@@ -860,14 +859,14 @@ class StoredDict(StoredObject):
                 base.update(puts)
             else:
                 base = puts
-            yield bucket, db_boosts.serialize(base)
+            yield bucket, memoryview(db_boosts.serialize(base))
 
         # partial deletes
         for bucket, deletes in self._delete_buckets.items():
             base = self.fetched_buckets.get(bucket) or db_boosts.deserialize(self._deletes_gets[bucket])
             for k in deletes:
                 base.pop(k, None)
-            yield bucket, db_boosts.serialize(base)
+            yield bucket, memoryview(db_boosts.serialize(base))
 
 
     def setdefault(self, key: bytes, default: bytes) -> bytes:
@@ -895,9 +894,9 @@ class StoredDict(StoredObject):
             if self.do_batch_writes:
                 self._bucket_gets = cursor.getmulti(keys=self._put_buckets.keys())
                 self._deletes_gets = cursor.getmulti(keys=self._delete_buckets.keys())
-                cursor.putmulti(items=self._puts_gen_batched())
+                cursor.putmulti(items=self._puts_gen_batched(), reserve=True)
             else:
-                cursor.putmulti(items=self._put_buffer.items())
+                cursor.putmulti(items=self._put_buffer.items(), reserve=True)
                 for key in self._del_buffer:
                     cursor.delete(key)
                     self.absent.add(key)

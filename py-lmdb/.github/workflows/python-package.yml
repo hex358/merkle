@@ -1,0 +1,185 @@
+name: Build and test py-lmdb
+
+on:
+  push:
+    branches: [master, release]
+    tags:
+      - 'py-lmdb_*'
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: Test ${{ matrix.os }} (py${{ matrix.python-version }}, ${{ matrix.impl }}, ${{ matrix.purity }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+        python-version: ['3.8', '3.11', '3.13']
+        impl: [cpython, cffi]
+        purity: [patched, pure]
+        include:
+          - os: ubuntu-24.04
+            python-version: 'pypy-3.10'
+            impl: 'cffi'
+            purity: 'patched'
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Set env vars
+      shell: bash
+      run: |
+        if [[ "${{ matrix.impl }}" == "cpython" ]]; then
+          echo "LMDB_FORCE_CPYTHON=1" >> $GITHUB_ENV
+        else
+          echo "LMDB_FORCE_CFFI=1" >> $GITHUB_ENV
+        fi
+        if [[ "${{ matrix.purity }}" == "pure" ]]; then
+          echo "LMDB_PURE=1" >> $GITHUB_ENV
+        fi
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest cffi patch-ng setuptools
+        python setup.py develop
+
+    - name: Test with pytest
+      run: pytest
+
+  build_cpython_wheels:
+    name: Build CPython wheels on ${{ matrix.os }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        if: runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp*"
+          CIBW_SKIP: "*-musllinux_*"
+          LMDB_FORCE_CPYTHON: 1
+          CIBW_TEST_COMMAND: ""
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  build_pypy_wheel:
+    name: Build PyPy wheel
+    needs: test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 'pypy-3.10'
+
+      - name: Install dependencies
+        run: pip install wheel cffi
+
+      - name: Build pure Python wheel
+        run: |
+          export LMDB_FORCE_CFFI=1
+          pip wheel . -w dist --no-deps
+
+      - name: Upload PyPy wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypy-wheel
+          path: dist/*.whl
+
+  publish-to-test-pypi:
+    name: Publish wheels to Test PyPI
+    permissions:
+      id-token: write
+    needs: [build_cpython_wheels, build_pypy_wheel]
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          pip install setuptools
+          python setup.py sdist
+
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: cibw-wheels-*
+          merge-multiple: true
+      
+      - name: Download PyPy wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: pypy-wheel
+          path: dist
+
+      - name: Publish distribution to Test PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish:
+    name: Publish wheels
+    permissions:
+      id-token: write
+    needs: [build_cpython_wheels, build_pypy_wheel]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags')
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          pip install setuptools
+          python setup.py sdist
+
+      - name: Download all wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: cibw-wheels-*
+          merge-multiple: true
+      
+      - name: Download PyPy wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: pypy-wheel
+          path: dist
+
+      - name: Publish distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
