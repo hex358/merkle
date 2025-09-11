@@ -4,10 +4,12 @@ from typing import List, Dict, Optional, Tuple, Any
 
 from database.interface import (
 	StoredDict, StoredList, StoredReference, BatchingConfig,
-	encode_val, decode_val
+	encode_val, decode_val, Start
 )
 
-# ---------- storage layout (NyanDB) ----------
+Start(".db", 4096, False, 30000)
+
+# ---------- storage layout (HexDB) ----------
 
 # append-only list of node hashes (raw bytes, no encode_val to keep fast)
 node_hashes: StoredList = StoredList(name=b"node_hashes", batching_config=BatchingConfig(512, True, 16))
@@ -28,7 +30,7 @@ peaks_start: StoredList = StoredList(name=b"peaks_start", batching_config=Batchi
 
 INTERNAL_PREFIX = b"mmr_internal_nodes_lvl_"
 
-# ---------- helpers for NyanDB keys/refs ----------
+# ---------- helpers for HexDB keys/refs ----------
 
 _pack_u32 = struct.Struct(">I").pack
 _pack_u64 = struct.Struct(">Q").pack
@@ -41,8 +43,8 @@ def _start_key(start_index: int) -> bytes:
 
 def _encode_ref_to(obj) -> bytes:
 	# encode as type 'r' + name using encode_val, which expects a StoredReference-typed value
-	ref = StoredReference()     # bare instance is fine; we just need a .name for encode_val
-	ref.name = obj.name
+	ref = StoredReference(obj)     # bare instance is fine; we just need a .name for encode_val
+	#ref.name = obj.name
 	return encode_val(ref)
 
 def _iter_peaks_sorted() -> List[Tuple[int, bytes, int]]:
@@ -267,14 +269,14 @@ def client_check(bundle: Dict[str, Any]) -> bool: # placeholder, move to client 
 from time import perf_counter
 
 if __name__ == "__main__":
-	# t = perf_counter()
-	# for i in range(50000):
-	# 	add(str(i).encode("utf-8"))
-	# for i in to_flush:
-	# 	i.flush_buffer()
-	# node_hashes.flush_buffer()
-	# node_hash_indexes.flush_buffer()
-	# internal_nodes_by_height.flush_buffer()
-	# peaks.flush_buffer()
-	# peaks_start.flush_buffer()
+	t = perf_counter()
+	for i in range(50000):
+		add(str(i).encode("utf-8"))
+	for i in to_flush:
+		i.flush_buffer()
+	node_hashes.flush_buffer()
+	node_hash_indexes.flush_buffer()
+	internal_nodes_by_height.flush_buffer()
+	peaks.flush_buffer()
+	peaks_start.flush_buffer()
 	print(client_check(server_check(str(32768+2).encode("ascii"))))

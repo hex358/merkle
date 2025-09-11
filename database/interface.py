@@ -1,4 +1,4 @@
-# AlbertoDB 1.0.0
+# HexDB 1.0.0
 
 import os
 import struct
@@ -61,6 +61,7 @@ class StoredReference:
 
     def __init__(self, instance: "StoredObject"):
         self.name = instance.name
+        self.env = instance.env
         StoredReference.references[instance.name] = instance
 
     @staticmethod
@@ -77,11 +78,11 @@ class StoredReference:
                 return inst
 
             try:
-                stat_db = self.env.open_db(name + b"__stat", create=False)
+                stat_db = global_env.open_db(name + b"__stat", create=False)
             except lmdb.Error as e:
                 raise KeyError(f"StoredObject {name!r} not found (no __stat db)") from e
 
-            with env.begin(db=stat_db, write=False) as txn:
+            with global_env.begin(db=stat_db, write=False) as txn:
                 t  = txn.get(b"type")  # b"1" => StoredList, b"2" => StoredDict
                 if t is None:
                     raise KeyError(f"StoredObject {name!r} missing 'type' in __stat")
@@ -134,7 +135,7 @@ def encode_val(value) -> bytes:
             return b'b' + value
         case Types.TYPE_SREF:
             # stored reference: prefix 'r' and include reference name
-            return b'r' + value.name
+            return b'r' + value.name# + b":" + value.env.path()
         case Types.TYPE_NONE:
             # none type: prefix 'n' only
             return b'n'
@@ -163,6 +164,7 @@ def decode_val(data: bytes):
             return None
         case 114:  # ord('r')
             # retrieve stored reference by name
+            #payloads = payload.split(b":")
             return StoredReference.from_reference(payload)
         case _:
             # ??
@@ -559,9 +561,9 @@ class StoredList(StoredObject):
                     call = self._puts_gen_constant; args = ()
                 else:
                     call = self._puts_gen_batched; args = ()
-            cursor.putmulti(append=True, items=call(*args), reserve="hi")
+            cursor.putmulti(append=True, items=call(*args), reserve=0)
             if self.leftover:
-                cursor.putmulti(append=False, items=self.leftover, reserve=True)
+                cursor.putmulti(append=False, items=self.leftover, reserve=0)
                 self.leftover.clear()
 
             call_sets = self._sets_gen
@@ -570,7 +572,7 @@ class StoredList(StoredObject):
 
             self.get_results = cursor.getmulti(self._batched_writes.keys())
 
-            cursor.putmulti(items=call_sets(), reserve=True)
+            cursor.putmulti(items=call_sets(), reserve=0)
 
         if self.do_batch_writes:
             self.write_stat(key=b"length", value=str(total).encode("ascii"))
@@ -894,9 +896,9 @@ class StoredDict(StoredObject):
             if self.do_batch_writes:
                 self._bucket_gets = cursor.getmulti(keys=self._put_buckets.keys())
                 self._deletes_gets = cursor.getmulti(keys=self._delete_buckets.keys())
-                cursor.putmulti(items=self._puts_gen_batched(), reserve=True)
+                cursor.putmulti(items=self._puts_gen_batched(), reserve=0)
             else:
-                cursor.putmulti(items=self._put_buffer.items(), reserve=True)
+                cursor.putmulti(items=self._put_buffer.items(), reserve=0)
                 for key in self._del_buffer:
                     cursor.delete(key)
                     self.absent.add(key)
