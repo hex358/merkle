@@ -2340,8 +2340,11 @@ cursor_item(CursorObject *self)
     return NULL;
 }
 
+
 /**
- * Cursor.key() -> result
+ * Cursor.key() -> memoryview(key) (zero-copy)
+ *
+ * NOTE: View is valid only for the life of the transaction / until mutation.
  */
 static PyObject *
 cursor_key(CursorObject *self)
@@ -2349,13 +2352,17 @@ cursor_key(CursorObject *self)
     if(! self->valid) {
         return err_invalid();
     }
-    /* Must refresh `key` and `val` following mutation. */
+    /* Must refresh `key`/`val` following mutation. */
     if(self->last_mutation != self->trans->mutations &&
        _cursor_get_c(self, MDB_GET_CURRENT)) {
         return NULL;
     }
-    return obj_from_val(&self->key, self->trans->flags & TRANS_BUFFERS);
+
+    return PyMemoryView_FromMemory((char*)self->key.mv_data,
+                                   (Py_ssize_t)self->key.mv_size,
+                                   PyBUF_READ);
 }
+
 
 /**
  * Cursor.last() -> bool
@@ -2428,6 +2435,263 @@ cursor_prev_nodup(CursorObject *self)
 {
     return _cursor_get(self, MDB_PREV_NODUP);
 }
+
+
+/**
+ * Cursor.putmulti_reserve(items: Iterable[(key, [parts...])]) -> [memoryview...]
+ *
+ * Each element in `items` is a (key, parts_iterable) pair.
+ * Reserve space for each value and copy parts directly into LMDB.
+ * Returns list of writable memoryviews (one per value).
+ */
+static PyObject *
+cursor_putmulti_reserve(CursorObject *self, PyObject *args, PyObject *kwds)
+{
+    struct putmulti_reserve_sz {
+        PyObject *items;
+        int       append;
+    } arg = {Py_None, 0};
+
+    static const struct argspec argspec[] = {
+        {"items",  ARG_OBJ,  OFFSET(putmulti_reserve_sz, items)},
+        {"append", ARG_BOOL, OFFSET(putmulti_reserve_sz, append)},
+    };
+
+    static PyObject *cache = NULL;
+    if (parse_args(self->valid, SPECSIZE(), argspec, &cache, args, kwds, &arg)) {
+        return NULL;
+    }
+
+    if (!arg.items) {
+        return type_error("'items' iterable required");
+    }
+
+    PyObject *iter = PyObject_GetIter(arg.items);
+    if (!iter) {
+        return type_error("'items' must be iterable of (key, size)");
+    }
+
+    PyObject *result = PyList_New(0);
+    if (!result) {
+        Py_DECREF(iter);
+        return NULL;
+    }
+
+    int flags_base = MDB_RESERVE;
+    if (arg.append) {
+        flags_base |= (self->dbi_flags & MDB_DUPSORT) ? MDB_APPENDDUP : MDB_APPEND;
+    }
+
+    PyObject *item;
+    while ((item = PyIter_Next(iter))) {
+        /* Each item must be a 2-tuple: (key_like, size_int) */
+        if (!PyTuple_CheckExact(item) || PyTuple_GET_SIZE(item) != 2) {
+            Py_DECREF(item);
+            Py_DECREF(iter);
+            Py_DECREF(result);
+            return type_error("items must yield 2-tuples: (key, size)");
+        }
+
+        PyObject *key_obj  = PyTuple_GET_ITEM(item, 0);
+        PyObject *size_obj = PyTuple_GET_ITEM(item, 1);
+
+        MDB_val mkey;
+        if (val_from_buffer(&mkey, key_obj)) {
+            /* val_from_buffer sets the exception */
+            Py_DECREF(item);
+            Py_DECREF(iter);
+            Py_DECREF(result);
+            return NULL;
+        }
+
+        uint64_t size_u64 = 0;
+        if (parse_ulong(size_obj, &size_u64, py_size_max)) {
+            Py_DECREF(item);
+            Py_DECREF(iter);
+            Py_DECREF(result);
+            return NULL;
+        }
+
+        MDB_val mval;
+        mval.mv_size = (size_t)size_u64;
+        mval.mv_data = NULL;
+
+        int rc;
+        UNLOCKED(rc, mdb_cursor_put(self->curs, &mkey, &mval, flags_base));
+        self->trans->mutations++;
+        if (rc) {
+            Py_DECREF(item);
+            Py_DECREF(iter);
+            Py_DECREF(result);
+            return err_set("mdb_cursor_put(MDB_RESERVE)", rc);
+        }
+
+        PyObject *mv = PyMemoryView_FromMemory(
+            (char *)mval.mv_data,
+            (Py_ssize_t)mval.mv_size,
+            PyBUF_WRITE
+        );
+        if (!mv) {
+            Py_DECREF(item);
+            Py_DECREF(iter);
+            Py_DECREF(result);
+            return NULL;
+        }
+
+        if (PyList_Append(result, mv)) {
+            Py_DECREF(mv);
+            Py_DECREF(item);
+            Py_DECREF(iter);
+            Py_DECREF(result);
+            return NULL;
+        }
+
+        Py_DECREF(mv);
+        Py_DECREF(item);
+    }
+
+    Py_DECREF(iter);
+
+    if (PyErr_Occurred()) {
+        Py_DECREF(result);
+        return NULL;
+    }
+
+    return result;
+}
+
+/**
+ * Cursor.put_reserve(key, size, append=False) -> memoryview
+ *
+ * Reserve `size` bytes for `key` using MDB_RESERVE and return a writable
+ * memoryview into LMDB's page so the caller can fill it in-place.
+ */
+static PyObject *
+cursor_put_reserve(CursorObject *self, PyObject *args, PyObject *kwds)
+{
+    struct put_reserve_sz {
+        MDB_val  key;
+        size_t   size;
+        int      append;
+    } arg = {{0, 0}, 0, 0};
+
+    static const struct argspec argspec[] = {
+        {"key",    ARG_BUF,  OFFSET(put_reserve_sz, key)},
+        {"size",   ARG_SIZE, OFFSET(put_reserve_sz, size)},
+        {"append", ARG_BOOL, OFFSET(put_reserve_sz, append)},
+    };
+
+    static PyObject *cache = NULL;
+    if (parse_args(self->valid, SPECSIZE(), argspec, &cache, args, kwds, &arg)) {
+        return NULL;
+    }
+
+    if (!arg.key.mv_data) {
+        return type_error("key must be given.");
+    }
+
+    MDB_val mval;
+    mval.mv_size = arg.size;
+    mval.mv_data = NULL;
+
+    int flags = MDB_RESERVE;
+    if (arg.append) {
+        flags |= (self->dbi_flags & MDB_DUPSORT) ? MDB_APPENDDUP : MDB_APPEND;
+    }
+
+    int rc;
+    UNLOCKED(rc, mdb_cursor_put(self->curs, &arg.key, &mval, flags));
+    self->trans->mutations++;
+    if (rc) {
+        return err_set("mdb_cursor_put(MDB_RESERVE)", rc);
+    }
+
+    /* Return a writable view pointing at LMDB's reserved buffer. */
+    return PyMemoryView_FromMemory(
+        (char *)mval.mv_data,
+        (Py_ssize_t)mval.mv_size,
+        PyBUF_WRITE
+    );
+}
+
+
+/**
+ * Cursor.putmulti_fast(list_of_pairs, dupdata=True, overwrite=True, append=False)
+ *
+ * Like putmulti(), but:
+ *   - Requires a Python list of (key, value) pairs (not any iterable).
+ *   - Loops in C with GIL released.
+ *   - No reserve support (kept simple & fast).
+ */
+static PyObject *
+cursor_putmulti_fast(CursorObject *self, PyObject *args, PyObject *kwds)
+{
+    /* Keep the tag name exactly what you use in OFFSET(...) below */
+    struct cursor_putmulti_fast {
+        PyObject *items;
+        int dupdata;
+        int overwrite;
+        int append;
+    } arg = {Py_None, 1, 1, 0};
+
+    static const struct argspec argspec[] = {
+        {"items",     ARG_OBJ,  OFFSET(cursor_putmulti_fast, items)},
+        {"dupdata",   ARG_BOOL, OFFSET(cursor_putmulti_fast, dupdata)},
+        {"overwrite", ARG_BOOL, OFFSET(cursor_putmulti_fast, overwrite)},
+        {"append",    ARG_BOOL, OFFSET(cursor_putmulti_fast, append)},
+    };
+
+    static PyObject *cache = NULL;
+    if (parse_args(self->valid, SPECSIZE(), argspec, &cache, args, kwds, &arg)) {
+        return NULL;
+    }
+
+    if (!PyList_CheckExact(arg.items)) {
+        PyErr_SetString(PyExc_TypeError, "putmulti_fast() requires a list of (key, value) pairs");
+        return NULL;
+    }
+
+    int flags = 0;
+    if (!arg.dupdata)   flags |= MDB_NODUPDATA;
+    if (!arg.overwrite) flags |= MDB_NOOVERWRITE;
+    if (arg.append)     flags |= (self->dbi_flags & MDB_DUPSORT) ? MDB_APPENDDUP : MDB_APPEND;
+
+    Py_ssize_t n = PyList_GET_SIZE(arg.items);
+    Py_ssize_t consumed = 0;
+    Py_ssize_t added    = 0;
+
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *item = PyList_GET_ITEM(arg.items, i);  /* borrowed */
+        if (!PyTuple_CheckExact(item) || PyTuple_GET_SIZE(item) != 2) {
+            PyErr_SetString(PyExc_TypeError, "putmulti_fast() elements must be 2-tuples");
+            return NULL;
+        }
+
+        MDB_val mkey, mval;
+        if (val_from_buffer(&mkey, PyTuple_GET_ITEM(item, 0)) ||
+            val_from_buffer(&mval, PyTuple_GET_ITEM(item, 1))) {
+            /* val_from_buffer has set the exception */
+            return NULL;
+        }
+
+        int rc;
+        UNLOCKED(rc, mdb_cursor_put(self->curs, &mkey, &mval, flags));
+        self->trans->mutations++;
+
+        if (rc == MDB_SUCCESS) {
+            added++;
+        } else if (rc == MDB_KEYEXIST) {
+            /* not fatal in NOOVERWRITE cases; keep going */
+        } else {
+            return err_format(rc, "mdb_cursor_put() element #%d", (int)consumed);
+        }
+        consumed++;
+    }
+
+    return Py_BuildValue("(nn)", consumed, added);
+}
+
+
 
 /**
  * Cursor.putmulti(iter|dict) -> (consumed, added)
@@ -2851,9 +3115,11 @@ cursor_value(CursorObject *self)
         _cursor_get_c(self, MDB_GET_CURRENT)) {
         return NULL;
     }
-    PRELOAD_UNLOCKED(0, self->val.mv_data, self->val.mv_size);
 
-    return obj_from_val(&self->val, self->trans->flags & TRANS_BUFFERS);
+    PRELOAD_UNLOCKED(0, self->val.mv_data, self->val.mv_size);
+    return PyMemoryView_FromMemory((char*)self->val.mv_data,
+                                   (Py_ssize_t)self->val.mv_size,
+                                   PyBUF_READ);
 }
 
 static PyObject *
@@ -3046,6 +3312,9 @@ static PyObject *cursor_close(CursorObject *self)
     Py_RETURN_NONE;
 }
 
+static PyObject *cursor_put_reserve(CursorObject *self, PyObject *args, PyObject *kwds);
+static PyObject *cursor_putmulti_reserve(CursorObject *self, PyObject *args, PyObject *kwds);
+
 static struct PyMethodDef cursor_methods[] = {
     {"__enter__", (PyCFunction)cursor_enter, METH_NOARGS},
     {"__exit__", (PyCFunction)cursor_exit, METH_VARARGS},
@@ -3082,7 +3351,14 @@ static struct PyMethodDef cursor_methods[] = {
     {"set_range_dup", (PyCFunction)cursor_set_range_dup, METH_VARARGS|METH_KEYWORDS},
     {"value", (PyCFunction)cursor_value, METH_NOARGS},
     {"_iter_from", (PyCFunction)cursor_iter_from, METH_VARARGS},
-    {NULL, NULL}
+    {"put_reserve", (PyCFunction)cursor_put_reserve, METH_VARARGS|METH_KEYWORDS,
+        "Reserve space for a value, fill it directly, return memoryview"},
+    {"putmulti_reserve", (PyCFunction)cursor_putmulti_reserve, METH_VARARGS|METH_KEYWORDS,
+        "Reserve space for multiple values, fill directly, return list of memoryviews"},
+    {"putmulti_fast", (PyCFunction)cursor_putmulti_fast,
+        METH_VARARGS | METH_KEYWORDS,
+        "Fast bulk put (list of (key,value) tuples, C loop, GIL released)"},
+    {NULL, NULL, 0, NULL}
 };
 
 static PyTypeObject PyCursor_Type = {

@@ -555,13 +555,18 @@ class StoredList(StoredObject):
         with self.env.begin(write=True, db=self._db, buffers=True) as txn:
             cursor = txn.cursor()
             args = ()
+            cache = []
             call = self._puts_gen_single
             if self.do_batch_writes:
                 if self.constant_length:
                     call = self._puts_gen_constant; args = ()
                 else:
                     call = self._puts_gen_batched; args = ()
-            cursor.putmulti(append=True, items=call(*args), reserve=0)
+           # print(args)
+            cursor.putmulti(items=(call(*args)), append=True)
+           # for i in range(len(a)):
+            #    a[i][:] = cache[i][:]
+            #print(a)
             if self.leftover:
                 cursor.putmulti(append=False, items=self.leftover, reserve=0)
                 self.leftover.clear()

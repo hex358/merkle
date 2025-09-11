@@ -73,6 +73,7 @@ py::bytes serialize(py::dict dict) {
 
 
 
+
 py::dict deserialize(py::bytes blob) {
 	// raw buffer
 	auto info = py::buffer(blob).request();
@@ -183,6 +184,14 @@ static py::bytearray patch_constant_length(const py::buffer &blob_buf,
 
     return py::reinterpret_steal<py::bytearray>(py::handle(ba));
 }
+
+
+static inline py::bytes pack_u64_be(std::uint64_t v) {
+    char k[8];
+    for (int i = 7; i >= 0; --i) { k[i] = static_cast<char>(v & 0xFFu); v >>= 8; }
+    return py::bytes(k, 8);
+}
+
 
 using namespace pybind11::literals;
 PYBIND11_MODULE(db_boosts, m) {

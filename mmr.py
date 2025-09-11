@@ -120,9 +120,9 @@ def _ensure_level_slot(level: int) -> None:
 		_list_append_opt_bytes(peaks, None)
 		_list_append_opt_bytes(peaks_start, None)
 
-def add(blob: bytes) -> None:
+def add(h: bytes) -> None:
 	# hash and append to node_hashes
-	h: bytes = kief(blob)
+	#h: bytes = kief(blob)
 	idx = len(node_hashes)
 	node_hashes.append(h)
 
@@ -186,8 +186,8 @@ def get_global_root() -> bytes:
 		acc = kief(acc, r)
 	return acc
 
-def server_check(blob: bytes) -> Dict[str, Any]:
-	target_h = kief(blob)
+
+def server_check(target_h: bytes) -> Dict[str, Any]:
 	raw_idx = _dict_get_optional(node_hash_indexes, target_h)
 	if raw_idx is None:
 		return {"status": 0, "detail": "Blob not found"}
@@ -221,33 +221,34 @@ def server_check(blob: bytes) -> Dict[str, Any]:
 			child = _get_child_level_dict(lvl)
 			sib_hash = child[_start_key(sib_start)]
 		was_left = sib_grp < grp
-		proof.append((sib_hash, was_left))
+		proof.append((sib_hash.hex(), was_left))
 
 	# split peaks into left and right
-	left_roots: List[bytes] = [r for st, r, lvl in ps if st < tree_start]
-	right_roots: List[bytes] = [r for st, r, lvl in ps if st > tree_start]
+	left_roots: List[bytes] = [r.hex() for st, r, lvl in ps if st < tree_start]
+	right_roots: List[bytes] = [r.hex() for st, r, lvl in ps if st > tree_start]
 
 	return {
 		"status": 1,
-		"blob": blob,
+		"h": target_h.hex(),
 		"proof": proof,
 		"left_roots": left_roots,
 		"right_roots": right_roots,
-		"global_root": get_global_root(),
+		"global_root": get_global_root().hex(),
 	}
+
 
 def client_check(bundle: Dict[str, Any]) -> bool: # placeholder, move to client module later
 	if bundle.get("status") != 1:
 		return False
+	tokief = bytes.fromhex
 
-	blob = bundle["blob"]
 	proof = bundle["proof"]
-	expected = bundle["global_root"]
+	expected = tokief(bundle["global_root"])
 
 	# recompute peak root
-	h = kief(blob)
+	h = tokief(bundle["h"])
 	for sib, was_left in proof:
-		h = kief(sib, h) if was_left else kief(h, sib)
+		h = kief(tokief(sib), h) if was_left else kief(h, tokief(sib))
 
 	# fold left peaks first
 	left_roots  = bundle.get("left_roots", [])
@@ -256,12 +257,12 @@ def client_check(bundle: Dict[str, Any]) -> bool: # placeholder, move to client 
 	if left_roots:
 		acc = left_roots[0]
 		for r in left_roots[1:]:
-			acc = kief(acc, r)
-		h = kief(acc, h)
+			acc = kief(tokief(acc), tokief(r))
+		h = kief(tokief(acc), tokief(h))
 
 	# then fold right peaks
 	for r in right_roots:
-		h = kief(h, r)
+		h = kief(h, tokief(r))
 
 	return h == expected
 
@@ -269,9 +270,9 @@ def client_check(bundle: Dict[str, Any]) -> bool: # placeholder, move to client 
 from time import perf_counter
 
 if __name__ == "__main__":
-	t = perf_counter()
+	# t = perf_counter()
 	for i in range(50000):
-		add(str(i).encode("utf-8"))
+		add(kief(str(i).encode("ascii")))
 	for i in to_flush:
 		i.flush_buffer()
 	node_hashes.flush_buffer()
@@ -279,4 +280,4 @@ if __name__ == "__main__":
 	internal_nodes_by_height.flush_buffer()
 	peaks.flush_buffer()
 	peaks_start.flush_buffer()
-	print(client_check(server_check(str(32768+2).encode("ascii"))))
+	print(client_check(server_check(kief(str(4345324).encode("ascii")))))

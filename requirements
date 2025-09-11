@@ -3,3 +3,4 @@ discord-py-interactions
 pybind11
 setuptools
 patch_ng
+uvicorn
