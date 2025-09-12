@@ -2711,11 +2711,8 @@ cursor_put_multi(CursorObject *self, PyObject *args, PyObject *kwds)
         int reserve;   /* NEW */
     } arg = {Py_None, 1, 1, 0, 0};
 
-    PyObject *iter;
-    PyObject *item;
-
     static const struct argspec argspec[] = {
-        {"items", ARG_OBJ, OFFSET(cursor_put_multi, items)},
+        {"items", ARG_OBJ,  OFFSET(cursor_put_multi, items)},
         {"dupdata", ARG_BOOL, OFFSET(cursor_put_multi, dupdata)},
         {"overwrite", ARG_BOOL, OFFSET(cursor_put_multi, overwrite)},
         {"append", ARG_BOOL, OFFSET(cursor_put_multi, append)},
@@ -2727,37 +2724,32 @@ cursor_put_multi(CursorObject *self, PyObject *args, PyObject *kwds)
     Py_ssize_t consumed = 0;
     Py_ssize_t added = 0;
 
-    PyObject *ret = NULL;
+    PyObject *iter;
+    PyObject *item;
     PyObject *mv_list = NULL;
 
     static PyObject *cache = NULL;
-    if(parse_args(self->valid, SPECSIZE(), argspec, &cache, args, kwds, &arg)) {
+    if (parse_args(self->valid, SPECSIZE(), argspec, &cache, args, kwds, &arg)) {
         return NULL;
     }
 
-    if(! arg.dupdata) {
+    if (!arg.dupdata)
         flags |= MDB_NODUPDATA;
-    }
-    if(! arg.overwrite) {
+    if (!arg.overwrite)
         flags |= MDB_NOOVERWRITE;
-    }
-    if(arg.append) {
+    if (arg.append)
         flags |= (self->dbi_flags & MDB_DUPSORT) ? MDB_APPENDDUP : MDB_APPEND;
-    }
-    if(arg.reserve) {
+    if (arg.reserve) {
         flags |= MDB_RESERVE;
         mv_list = PyList_New(0);
-        if(! mv_list) return NULL;
+        if (!mv_list) return NULL;
     }
 
-    if(! ((iter = PyObject_GetIter(arg.items)))) {
+    if (!(iter = PyObject_GetIter(arg.items)))
         return NULL;
-    }
 
-    while((item = PyIter_Next(iter))) {
-        MDB_val mkey, mval;
-
-        if(! (PyTuple_CheckExact(item) && PyTuple_GET_SIZE(item) == 2)) {
+    while ((item = PyIter_Next(iter))) {
+        if (!(PyTuple_CheckExact(item) && PyTuple_GET_SIZE(item) == 2)) {
             PyErr_SetString(PyExc_TypeError,
                             "putmulti() elements must be 2-tuples");
             Py_DECREF(item);
@@ -2766,39 +2758,92 @@ cursor_put_multi(CursorObject *self, PyObject *args, PyObject *kwds)
             return NULL;
         }
 
-        if(val_from_buffer(&mkey, PyTuple_GET_ITEM(item, 0)) ||
-           val_from_buffer(&mval, PyTuple_GET_ITEM(item, 1))) {
+        PyObject *py_key = PyTuple_GET_ITEM(item, 0);
+        PyObject *py_val = PyTuple_GET_ITEM(item, 1);
+
+        MDB_val mkey, mval;
+        if (val_from_buffer(&mkey, py_key)) {
             Py_DECREF(item);
             Py_DECREF(iter);
             Py_XDECREF(mv_list);
-            return NULL; /* val_from_buffer sets exception */
+            return NULL;
+        }
+
+        int use_reserve = arg.reserve;
+        Py_buffer src_view;
+        int have_src_view = 0;
+
+        if (use_reserve) {
+            if (PyObject_CheckBuffer(py_val)) {
+                /* bytes/bytearray/memoryview -> autofill after put */
+                if (PyObject_GetBuffer(py_val, &src_view, PyBUF_SIMPLE) < 0) {
+                    Py_DECREF(item);
+                    Py_DECREF(iter);
+                    Py_XDECREF(mv_list);
+                    return NULL;
+                }
+                have_src_view = 1;
+                mval.mv_size = (size_t)src_view.len;
+                mval.mv_data = NULL;
+            } else if (PyLong_Check(py_val)) {
+                Py_ssize_t n = PyLong_AsSsize_t(py_val);
+                if (n < 0) {
+                    PyErr_SetString(PyExc_ValueError, "reserve size must be >= 0");
+                    Py_DECREF(item);
+                    Py_DECREF(iter);
+                    Py_XDECREF(mv_list);
+                    return NULL;
+                }
+                mval.mv_size = (size_t)n;
+                mval.mv_data = NULL;
+            } else {
+                PyErr_SetString(PyExc_TypeError,
+                    "with reserve=1, value must be bytes-like (autofill) or int (size)");
+                Py_DECREF(item);
+                Py_DECREF(iter);
+                Py_XDECREF(mv_list);
+                return NULL;
+            }
+        } else {
+            if (val_from_buffer(&mval, py_val)) {
+                Py_DECREF(item);
+                Py_DECREF(iter);
+                Py_XDECREF(mv_list);
+                return NULL;
+            }
         }
 
         UNLOCKED(rc, mdb_cursor_put(self->curs, &mkey, &mval, flags));
         self->trans->mutations++;
 
-        switch(rc) {
-        case MDB_SUCCESS:
+        if (rc == MDB_SUCCESS) {
             added++;
-            if(arg.reserve) {
-                PyObject *buf = PyMemoryView_FromMemory(
-                    (char*)mval.mv_data,
-                    (Py_ssize_t)mval.mv_size,
-                    PyBUF_WRITE
-                );
-                if(!buf || PyList_Append(mv_list, buf)) {
-                    Py_XDECREF(buf);
-                    Py_DECREF(item);
-                    Py_DECREF(iter);
-                    Py_DECREF(mv_list);
-                    return NULL;
+            if (use_reserve) {
+                if (have_src_view) {
+                    /* Copy Python bytes into reserved page */
+                    memcpy(mval.mv_data, src_view.buf, mval.mv_size);
+                    PyBuffer_Release(&src_view);
+                } else {
+                    /* size-only: expose writable view */
+                    PyObject *buf = PyMemoryView_FromMemory(
+                        (char*)mval.mv_data,
+                        (Py_ssize_t)mval.mv_size,
+                        PyBUF_WRITE
+                    );
+                    if (!buf || PyList_Append(mv_list, buf)) {
+                        Py_XDECREF(buf);
+                        Py_DECREF(item);
+                        Py_DECREF(iter);
+                        Py_DECREF(mv_list);
+                        return NULL;
+                    }
+                    Py_DECREF(buf);
                 }
-                Py_DECREF(buf);
             }
-            break;
-        case MDB_KEYEXIST:
-            break;
-        default:
+        } else if (rc == MDB_KEYEXIST) {
+            if (have_src_view) PyBuffer_Release(&src_view);
+        } else {
+            if (have_src_view) PyBuffer_Release(&src_view);
             Py_DECREF(item);
             Py_DECREF(iter);
             Py_XDECREF(mv_list);
@@ -2810,19 +2855,21 @@ cursor_put_multi(CursorObject *self, PyObject *args, PyObject *kwds)
     }
 
     Py_DECREF(iter);
-
-    if(PyErr_Occurred()) {
+    if (PyErr_Occurred()) {
         Py_XDECREF(mv_list);
         return NULL;
     }
 
-    if(arg.reserve) {
-        return mv_list;  /* list of memoryviews */
+    if (arg.reserve) {
+        /* List only contains memoryviews for int-sized reserves.
+           Autofilled bytes-like values are already written. */
+        return mv_list;
     } else {
-        ret = Py_BuildValue("(nn)", consumed, added);
-        return ret;
+        return Py_BuildValue("(nn)", consumed, added);
     }
 }
+
+
 
 
 /**

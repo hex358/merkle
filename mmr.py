@@ -258,7 +258,7 @@ def client_check(bundle: Dict[str, Any]) -> bool: # placeholder, move to client 
 		acc = left_roots[0]
 		for r in left_roots[1:]:
 			acc = kief(tokief(acc), tokief(r))
-		h = kief(tokief(acc), tokief(h))
+		h = kief(tokief(acc), h)
 
 	# then fold right peaks
 	for r in right_roots:
@@ -280,4 +280,4 @@ if __name__ == "__main__":
 	internal_nodes_by_height.flush_buffer()
 	peaks.flush_buffer()
 	peaks_start.flush_buffer()
-	print(client_check(server_check(kief(str(4345324).encode("ascii")))))
+	print(client_check(server_check(kief(b"95677"))))

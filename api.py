@@ -1,10 +1,11 @@
-from sanic import text, Sanic, html
+from sanic import text, Sanic, html, file
 from sanic import json as sanic_json
 from sanic.exceptions import NotFound, InvalidUsage
 import json
 import mmr
 from functools import wraps
 import traceback
+import web.app_router as router
 
 def contract(structure: dict):
     def decorator(func):
@@ -75,6 +76,7 @@ async def update_service(request):
     else:
         return sanic_json({"status": "ERR", "message": "Invalid token"})
 
+
 @app.post("/add_blob")
 @contract({"token": (0, str), "blob_hash": (16, str)})
 async def add_blob(request):
@@ -96,6 +98,16 @@ async def get_service(request):
     if not Services.service_exists(request.json["name"]):
         return sanic_json({"status": "ERR", "message": "Service doesn't exist"})
     return sanic_json({"status": "OK", "message": "", "metadata": Services.get_metadata(request.json["name"])})
+
+@app.route("/")
+async def index(_):
+    html_file = router.read("index")
+    return html(html_file)
+
+@app.route('/styles.css')
+async def serve_css(request):
+    return text(router.read("index", "css"), content_type="text/css")
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)

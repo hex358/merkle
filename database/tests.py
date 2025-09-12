@@ -1,17 +1,17 @@
 from interface import *
 
-Start("my_database", 4096*2, False)
+a = len("Hello warld!")
 
-text = b"a"*500
-
-stored = StoredList(name=b"list", batching_config=BatchingConfig(512, True, len(text)))
+Start(".db", 4096, False)
+lst = StoredList(name=b"list", batching_config=BatchingConfig(512, True, a))
 
 for i in range(1_000_000):
-	stored.append(text)
+	lst.append((b"H"*500))
 
 from time import perf_counter
-#
-t = perf_counter()
-stored.flush_buffer()
-print(perf_counter() - t)
 
+lst[5] = b"Hello world!"
+
+t = perf_counter()
+lst.flush_buffer()
+print(perf_counter()-t)

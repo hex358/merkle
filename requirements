@@ -4,3 +4,8 @@ pybind11
 setuptools
 patch_ng
 uvicorn
+
+# For PowerShell, for convenient running
+notepad $PROFILE
+function run-api { sanic api.app --dev }
+Set-Alias run run-api

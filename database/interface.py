@@ -442,6 +442,7 @@ class StoredList(StoredObject):
             yield (StoredList.int_pack(idx), v)
             idx += 1
 
+
     def _puts_gen_constant(self):
         int_pack = StoredList.int_pack
         bs, bl = self.batch_size, self.max_length
@@ -563,12 +564,12 @@ class StoredList(StoredObject):
                 else:
                     call = self._puts_gen_batched; args = ()
            # print(args)
-            cursor.putmulti(items=(call(*args)), append=True)
+            cursor.putmulti(items=(call(*args)), append=True, reserve=1)
            # for i in range(len(a)):
             #    a[i][:] = cache[i][:]
             #print(a)
             if self.leftover:
-                cursor.putmulti(append=False, items=self.leftover, reserve=0)
+                cursor.putmulti(append=False, items=self.leftover, reserve=1)
                 self.leftover.clear()
 
             call_sets = self._sets_gen
@@ -638,6 +639,7 @@ class StoredList(StoredObject):
 
         if self.cache_on_set:
             self._cache[index] = value
+        #if value is memoryview: value = bytes(value)
         return value
 
     def __setitem__(self, index: int, value: bytes) -> None:
