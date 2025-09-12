@@ -125,6 +125,7 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
+let zoom = 1.1;
 // parallax on scroll
 window.addEventListener("scroll", () => {
   const scrolled = window.scrollY;
@@ -145,7 +146,10 @@ for (let i = 0; i < numParticles; i++) {
 
 function animate() {
   ctx.clearRect(0, 0, width, height);
-
+  ctx.save();
+  ctx.translate(width/2, height/2); // move origin to center
+  ctx.scale(zoom, zoom);
+  ctx.translate(-width/2, -height/2);
   // draw particles
   for (let p of particles) {
     p.x += p.vx;
@@ -181,7 +185,7 @@ function animate() {
       }
     }
   }
-
+ctx.restore();
   requestAnimationFrame(animate);
 }
 

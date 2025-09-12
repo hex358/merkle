@@ -903,9 +903,9 @@ class StoredDict(StoredObject):
             if self.do_batch_writes:
                 self._bucket_gets = cursor.getmulti(keys=self._put_buckets.keys())
                 self._deletes_gets = cursor.getmulti(keys=self._delete_buckets.keys())
-                cursor.putmulti(items=self._puts_gen_batched(), reserve=0)
+                cursor.putmulti(items=self._puts_gen_batched(), reserve=1)
             else:
-                cursor.putmulti(items=self._put_buffer.items(), reserve=0)
+                cursor.putmulti(items=self._put_buffer.items(), reserve=1)
                 for key in self._del_buffer:
                     cursor.delete(key)
                     self.absent.add(key)

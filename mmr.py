@@ -280,4 +280,4 @@ if __name__ == "__main__":
 	internal_nodes_by_height.flush_buffer()
 	peaks.flush_buffer()
 	peaks_start.flush_buffer()
-	print(client_check(server_check(kief(b"95677"))))
+	print(client_check(server_check(kief(b"4"))))
