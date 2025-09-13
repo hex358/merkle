@@ -91,8 +91,15 @@
 }
 
 html {
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
+
+.scroll-wrapper {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  will-change: transform;
+}
+
 
 body {
   font-family: var(--font-family-primary);
@@ -100,7 +107,7 @@ body {
   font-weight: var(--font-weight-normal);
   line-height: var(--line-height-normal);
   color: var(--color-text-primary);
-  background-color: var(--color-background);
+  background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
   min-height: 100vh;
 }
 
@@ -141,8 +148,14 @@ body {
 .nav-brand {
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-bold);
-  color: var(--color-accent);
+    background: linear-gradient(135deg, #56c6dc, #db6699);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
+
+
+
 
 .nav-menu {
   display: flex;
@@ -159,7 +172,7 @@ body {
 }
 
 .nav-link:hover {
-  color: var(--color-accent);
+  color: #00d4ff;
 }
 
 .nav-link::after {
@@ -169,7 +182,7 @@ body {
   height: 2px;
   bottom: -4px;
   left: 0;
-  background-color: var(--color-accent);
+  background-color: #00d4ff;
   transition: width var(--transition-normal);
 }
 
@@ -195,15 +208,14 @@ body {
 }
 
 .hero-title {
-  font-size: var(--font-size-6xl);
-  font-weight: var(--font-weight-bold);
-  color: var(--color-accent);
-  margin-bottom: var(--spacing-lg);
-  line-height: var(--line-height-tight);
-  text-shadow:
-    0 0 8px rgba(157, 78, 221, 0.3),
-    0 0 16px rgba(114, 9, 183, 0.3),
-    0 0 32px rgba(114, 9, 183, 0.3);
+    font-size: 4rem;
+    font-weight: 700;
+    margin-bottom: 2rem;
+    background: linear-gradient(135deg, #00d4ff, #ff006e);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    min-height: 5rem;
 }
 
 .hero-description {
@@ -233,12 +245,12 @@ body {
 
 .offerings-section {
   padding: 2.5rem 0 4rem 0;
-  background-color: var(--color-surface);
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .offerings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: var(--grid-gap);
 
   align-items: stretch;
@@ -256,9 +268,12 @@ body {
   }
 }
 
+
+
+
 .offering-card {
-  background-color: var(--color-surface);
-  border: var(--border-width) solid var(--color-border);
+ background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(0, 212, 255, 0.3);
   border-radius: var(--border-radius-lg);
   padding: 1.5rem;
   min-height: 120px;
@@ -274,7 +289,7 @@ body {
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
   margin-bottom: 0rem;
-  padding: 0rem 0rem;
+  padding: 0rem 0rem 0.5rem 0rem;
 }
 
 .offering-description {
@@ -318,8 +333,8 @@ body {
 }
 
 .service-card {
-  background-color: var(--color-background);
-  border: var(--border-width) solid var(--color-border);
+  background: rgba(255, 255, 255, 0.1);
+  border: var(--border-width) solid rgba(0, 212, 255, 0.2);
   border-radius: var(--border-radius-xl);
   padding: var(--spacing-md); /* controls text distance from border */
   min-height: 250px;          /* static vertical size */
@@ -333,11 +348,9 @@ body {
 }
 
 .service-card:hover {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-lg);
-  scale: 1.01;
-  background-color: var(--color-surface-hover);
-  box-shadow: var(--shadow-md);
+    transform: scale(1.0);
+    border-color: #00d4ff;
+    box-shadow: 0 5px 15px rgba(0, 212, 255, 0.2);
 }
 
 .service-name {
@@ -404,9 +417,22 @@ body {
 .flex { display: flex; }
 .grid { display: grid; }
 
+
+
+
+#scroll-spacer {
+  width: 100%;
+  height: 0; /* will be synced from JS */
+}
+
 /* ==========================================================================
    RESPONSIVE DESIGN
    ========================================================================== */
+
+.hero-title {
+  font-family: monospace, "Roboto Mono"; /* e.g. 'Courier New', 'Roboto Mono' */
+}
+
 
 @media (max-width: 639px) {
   .nav-menu {
@@ -470,7 +496,8 @@ body {
 
 
 .offering-card {
-  height: 290px; /* expand to fill row height */
+  height: 310px; /* expand to fill row height */
+  padding: 1rem 1rem;
 }
 
 

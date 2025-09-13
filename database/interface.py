@@ -9,9 +9,16 @@ import db_boosts
 from dataclasses import dataclass
 
 
-if not os.path.isdir(".db"):
-    # create database directory if it does not exist
-    os.mkdir(".db")
+
+def _decode_env(name: bytes):
+    new_env = None
+    try:
+        data = StoredDict(name=b"__env_map")[name]
+    except:
+        return None
+    splitted = data.decode().split(":")
+    new_env = open_environment(splitted[0], float(splitted[1]), bool(splitted[2] == "1"), int(splitted[3]))
+    return new_env
 
 
 def open_environment(name: str,
@@ -21,8 +28,11 @@ def open_environment(name: str,
     """
     Opens LMDB environment with given parameters
     """
+    if str(name) != ".db":
+        env_map = StoredDict(name=b"__env_map")
+        env_map[name if isinstance(name, bytes) else name.encode()] = f"{name}:{size_mb}:{1 if lock_safe else 0}:{max_variables}".encode()
     return lmdb.open(
-        ".db/" + name,
+        ".hexdb/" + name,
         max_dbs=max_variables,
         map_size=size_mb * 1024 ** 2,
         writemap=True,
@@ -34,9 +44,12 @@ def open_environment(name: str,
 
 global_env = None
 
-def Start(*args, **kwargs):
+def Start(size_mb: int = 4096, lock_safe: bool = True, max_variables: int = 1024):
+    if not os.path.isdir(".hexdb"):
+        # create database directory if it does not exist
+        os.mkdir(".hexdb")
     global global_env
-    global_env = open_environment(*args, **kwargs)
+    global_env = open_environment(".db", size_mb, lock_safe, max_variables)
 
 
 @dataclass(frozen=True)
@@ -62,14 +75,16 @@ class StoredReference:
     def __init__(self, instance: "StoredObject"):
         self.name = instance.name
         self.env = instance.env
+        self.env_name = instance.env_name
         StoredReference.references[instance.name] = instance
 
     @staticmethod
-    def from_reference(name: bytes) -> "StoredObject":
+    def from_reference(name: bytes, my_env) -> "StoredObject":
         # fast path
         inst = StoredReference.references.get(name)
         if inst is not None:
             return inst
+        if my_env == None: my_env = global_env
 
         # slow path: try to re-open from __stat without creating anything new
         with StoredReference._lock:
@@ -78,11 +93,11 @@ class StoredReference:
                 return inst
 
             try:
-                stat_db = global_env.open_db(name + b"__stat", create=False)
+                stat_db = my_env.open_db(name + b"__stat", create=False)
             except lmdb.Error as e:
                 raise KeyError(f"StoredObject {name!r} not found (no __stat db)") from e
 
-            with global_env.begin(db=stat_db, write=False) as txn:
+            with my_env.begin(db=stat_db, write=False) as txn:
                 t  = txn.get(b"type")  # b"1" => StoredList, b"2" => StoredDict
                 if t is None:
                     raise KeyError(f"StoredObject {name!r} missing 'type' in __stat")
@@ -100,9 +115,9 @@ class StoredReference:
             )
 
             if t == b"1":
-                inst = StoredList(name=name, env=global_env, batching_config=cfg)
+                inst = StoredList(name=name, env=my_env, batching_config=cfg)
             elif t == b"2":
-                inst = StoredDict(name=name, env=global_env, batching_config=cfg)
+                inst = StoredDict(name=name, env=my_env, batching_config=cfg)
             else:
                 raise KeyError(f"Unknown stored type {t!r} for {name!r}")
 
@@ -135,7 +150,7 @@ def encode_val(value) -> bytes:
             return b'b' + value
         case Types.TYPE_SREF:
             # stored reference: prefix 'r' and include reference name
-            return b'r' + value.name# + b":" + value.env.path()
+            return b'r' + value.name + b":" + value.env_name
         case Types.TYPE_NONE:
             # none type: prefix 'n' only
             return b'n'
@@ -164,8 +179,10 @@ def decode_val(data: bytes):
             return None
         case 114:  # ord('r')
             # retrieve stored reference by name
-            #payloads = payload.split(b":")
-            return StoredReference.from_reference(payload)
+            payloads = payload.split(b":", 1)
+            decoded = _decode_env(payloads[0])
+            if decoded is None: env = global_env
+            return StoredReference.from_reference(payloads[0], decoded)
         case _:
             # ??
             raise ValueError(f"unknown typecode: {chr(code)}")
@@ -192,6 +209,8 @@ class StoredObject:
         Initializes StoredObject with configuration parameters
         """
         if env is None: env = global_env
+        import os
+        self.env_name = os.path.basename(env.path()).encode()
         if not batching_config.on:
             batching_config = default_batching_config
         assert name, "Name must be a non-empty bytestring"
@@ -643,30 +662,28 @@ class StoredList(StoredObject):
         return value
 
     def __setitem__(self, index: int, value: bytes) -> None:
-        # update cache, and buffer or lmdb depending on position
         length = len(self)
         if index < 0:
             index += length
-
         if not 0 <= index < length:
             raise IndexError(f"assignment {index} index out of range")
 
         if index >= self._persisted_len:
-            # if in active buffer space, write into it
             self._buffer[index - self._persisted_len] = value
         else:
-            # otherwise, write into dict
             if self.do_batch_writes:
-                res = divmod(index, self.batch_size)
-                page, slot = StoredList.int_pack(res[0]), res[1]
-                if not page in self._batched_writes:
+                page_i, slot = divmod(index, self.batch_size)
+                page = StoredList.int_pack(page_i)
+                if page not in self._batched_writes:
                     self._batched_writes[page] = {slot: value}
                 else:
                     self._batched_writes[page][slot] = value
             else:
                 self._index_buffer[index] = value
-        if self.cache_on_set:
-            self._cache[index] = value
+
+        # --- read-your-writes guarantee for lists ---
+        # Always overlay latest value in read cache (independent of cache_on_set).
+        self._cache[index] = bytes(value)
 
     def _default_iter(self):
         """
@@ -776,31 +793,29 @@ class StoredDict(StoredObject):
         self._delete_buckets = {}
 
     def __setitem__(self, key: bytes, value: bytes):
-        """
-        Buffers a set operation for the given key/value
-        """
+        # read-your-writes on dict gets:
         if self.cache_on_set:
             self._cache[key] = value
 
+        # important: key may have been negatively cached earlier
+        self.absent.discard(key)
+
         if not self.do_batch_writes:
-            # simple buffer for non-batched writes
             self._put_buffer[key] = value
             self._del_buffer.discard(key)
         else:
-            # batched writes go into bucket
             bucket = db_boosts.bucket(key, self.batch_size)
             if bucket in self._delete_buckets and key in self._delete_buckets[bucket]:
                 self._delete_buckets[bucket].remove(key)
-            if bucket not in self._put_buckets: self._put_buckets[bucket] = {key: value}
-            else: self._put_buckets[bucket][key] = value
-            if bucket in self.fetched_buckets: self.fetched_buckets[bucket][key] = value
+            if bucket not in self._put_buckets:
+                self._put_buckets[bucket] = {key: value}
+            else:
+                self._put_buckets[bucket][key] = value
+            if bucket in self.fetched_buckets:
+                self.fetched_buckets[bucket][key] = value
 
     def __getitem__(self, key: bytes | list) -> bytes | list[bytes]:
-        """
-        Retrieves value for key from cache or LMDB
-        """
         if key in self._cache:
-            # if cached
             return self._cache[key]
 
         if not self.do_batch_writes and key in self._put_buffer:
@@ -810,16 +825,21 @@ class StoredDict(StoredObject):
 
         if self.do_batch_writes:
             bucket = db_boosts.bucket(key, self.batch_size)
-            # if writes are batched
+
+            # short-circuit: pending delete wins
+            if bucket in self._delete_buckets and key in self._delete_buckets[bucket]:
+                raise KeyError(key)
+
+            # short-circuit: pending put wins
             if bucket in self._put_buckets and key in self._put_buckets[bucket]:
                 val = self._put_buckets[bucket][key]
                 self._cache[key] = val
                 return val
+
             if bucket not in self.fetched_buckets:
                 raw = self.env.begin(db=self._db, write=False).get(bucket)
                 if raw is None:
                     raise KeyError(key)
-                # from db_boosts c++ lib
                 data = db_boosts.deserialize(raw)
                 self.fetched_buckets[bucket] = data
             else:
@@ -829,7 +849,6 @@ class StoredDict(StoredObject):
                 raise KeyError(key)
             val = data[key]
         else:
-            # otherwise, go simple
             raw = self.env.begin(db=self._db, write=False).get(key)
             if raw is None:
                 raise KeyError(key)
@@ -837,6 +856,56 @@ class StoredDict(StoredObject):
 
         self._cache[key] = val
         return val
+
+    def __contains__(self, key: bytes) -> bool:
+        # Positive overlays first
+       # print(self._put_buffer)
+        if key in self._cache or (not self.do_batch_writes and key in self._put_buffer):
+            return True
+        if self.do_batch_writes and key in self._put_buckets:
+            return True
+
+        if self.do_batch_writes:
+            bucket = db_boosts.bucket(key, self.batch_size)
+
+            # Deletions override everything
+            if bucket in self._delete_buckets and key in self._delete_buckets[bucket]:
+                return False
+
+            # Pending put means present
+            if bucket in self._put_buckets and key in self._put_buckets[bucket]:
+                return True
+
+            # Only now consult negative cache
+            if key in self.absent:
+                return False
+
+            if bucket not in self.fetched_buckets:
+                raw = self.env.begin(db=self._db, write=False).get(bucket)
+                if raw is None:
+                    self.absent.add(key)
+                    return False
+                mapping = db_boosts.deserialize(raw)
+                self.fetched_buckets[bucket] = mapping
+            else:
+                mapping = self.fetched_buckets[bucket]
+
+            exists = key in mapping
+            if exists:
+                self._cache[key] = mapping[key]
+            else:
+                self.absent.add(key)
+            return exists
+
+        # non-batched path
+        if key in self.absent:
+            return False
+        raw = self.env.begin(db=self._db, write=False).get(key)
+        if raw is None:
+            self.absent.add(key)
+            return False
+        self._cache[key] = raw
+        return True
 
     def __delitem__(self, key: bytes):
         """
@@ -972,45 +1041,6 @@ class StoredDict(StoredObject):
         """
         raise NameError('Use method "iterate" instead')
 
-    def __contains__(self, key: bytes) -> bool:
-        """
-        Checks existence of key in dict, considering buffers
-        """
-        if key in self._cache or key in self._put_buffer:
-            return True
-        if key in self.absent:
-            return False
-
-        if not self.do_batch_writes:
-            raw = self.env.begin(db=self._db, write=False).get(key)
-            if raw is None:
-                self.absent.add(key)
-                return False
-            self._cache[key] = raw
-            return True
-
-        bucket = db_boosts.bucket(key, self.batch_size)
-        if bucket in self._delete_buckets and key in self._delete_buckets[bucket]:
-            return False
-        if bucket in self._put_buckets and key in self._put_buckets[bucket]:
-            return True
-
-        if bucket not in self.fetched_buckets:
-            raw = self.env.begin(db=self._db, write=False).get(bucket)
-            if raw is None:
-                self.absent.add(key)
-                return False
-            mapping = db_boosts.deserialize(raw)
-            self.fetched_buckets[bucket] = mapping
-        else:
-            mapping = self.fetched_buckets[bucket]
-
-        exists = key in mapping
-        if exists:
-            self._cache[key] = mapping[key]
-        else:
-            self.absent.add(key)
-        return exists
 
     def __repr__(self) -> str:
         """
