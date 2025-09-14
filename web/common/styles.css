@@ -78,7 +78,40 @@
   --transition-fast: 150ms ease;
   --transition-normal: 250ms ease;
   --transition-slow: 350ms ease;
+
+  --btn-glow-size: 2px;   /* default glow thickness */
+  --btn-glow-color: rgba(255,255,255,0.3);
+
+
 }
+
+.btnflat {
+    background: #b371ff;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btnflat:hover {
+    background: #c69bf8;
+}
+
+
+.btnflat-secondary {
+    background: #333;
+    color: #e0e0e0;
+}
+
+.btnflat-secondary:hover {
+    background: #444;
+}
+
+
 
 /* ==========================================================================
    BASE STYLES
@@ -348,7 +381,7 @@ body {
 }
 
 .service-card:hover {
-    transform: scale(1.01);
+    transform: scale(1.03);
     border-color: #00d4ff;
     box-shadow: 0 5px 15px rgba(0, 212, 255, 0.2);
 }
@@ -513,10 +546,11 @@ body {
 .offering-icon {
   width: 64px;
   height: 64px;
-  margin-top: 0.8rem;   /* push image to bottom */
-  margin-bottom: 0.0rem;
+  margin-top: 1rem;   /* push image to bottom */
+  margin-bottom: -1.0rem;
   margin-right: 0.5rem;
   display: block;     /* avoid inline baseline quirks */
+  -ms-interpolation-mode: bicubic;
 }
 
 .header {
@@ -549,11 +583,11 @@ body {
 }
 
 
-/* ==========================================================================
-   BUTTON COMPONENT
-   ========================================================================== */
+.offering-card {
 
-/* Button Base Styles */
+  height: 100%;           /* stretch to row height */
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -581,6 +615,7 @@ body {
   outline: none;
   appearance: none;
 }
+
 
 /* Size variants */
 .btn-xs {
@@ -616,13 +651,13 @@ body {
 .btn[data-fill][data-outline]:hover {
   background-color: var(--btn-fill-hover, var(--btn-fill-color));
   border-color: var(--btn-outline-hover, var(--btn-outline-color));
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px var(--btn-shadow, rgba(0, 0, 0, 0.3));
+  /*transform: translateY(-2px);*/
+  box-shadow: 0 5px 15px var(--btn-shadow, rgba(0, 0, 0, 0.3));
 }
 
 .btn[data-fill][data-outline]:active {
   transform: translateY(0);
-  box-shadow: 0 2px 10px var(--btn-shadow, rgba(0, 0, 0, 0.2));
+  /*box-shadow: 0 2px 10px var(--btn-shadow, rgba(0, 0, 0, 0.2));*/
 }
 
 /* Outline-only variant */
@@ -635,7 +670,7 @@ body {
 .btn-outline[data-outline]:hover {
   background-color: var(--btn-outline-color);
   color: #ffffff;
-  transform: translateY(-2px);
+  /*transform: translateY(-2px);*/
   box-shadow: 0 8px 25px var(--btn-shadow, rgba(0, 0, 0, 0.3));
 }
 
@@ -649,7 +684,7 @@ body {
 
 .btn-ghost[data-fill]:hover {
   opacity: 1;
-  transform: translateY(-2px);
+  /*transform: translateY(-2px);*/
   box-shadow: 0 8px 25px var(--btn-shadow, rgba(0, 0, 0, 0.3));
 }
 
@@ -690,4 +725,331 @@ body {
   align-items: stretch;
 }
 
+dark {
+  color: rgba(150, 150, 150, 1.0); /* 25% darker than pure black text */
+}
 
+
+.btn[data-align="center"] {
+  display: block;              /* makes the button a flex box */
+  margin-left: auto;
+  margin-right: auto;         /* ⬅ centers horizontally in parent */
+}
+
+.btn[data-align="right"] {
+  margin-left: auto;
+}
+
+.btn[data-align="left"] {
+  margin-right: auto;
+}
+
+
+.form-input {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: var(--border-width) solid rgb(203, 203, 203);
+  border-radius: var(--border-radius-md);
+  font-family: var(--font-family-primary);
+  font-size: var(--font-size-base);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  width: 100%;
+  transition: border-color var(--transition-fast);
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: rgb(203, 203, 203);
+  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.2);
+}
+
+
+.card-login {
+  background-color: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-xl);
+  transition: all var(--transition-normal);
+}
+
+
+
+.card-login {
+  background: rgba(255, 255, 255, 0.05);
+  border: var(--border-width) solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--border-radius-lg);
+  padding: var(--spacing-xl);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+/* Divider between OAuth and form */
+.divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid var(--color-border);
+}
+.divider:not(:empty)::before {
+  margin-right: 0.75em;
+}
+.divider:not(:empty)::after {
+  margin-left: 0.75em;
+}
+
+/* OAuth buttons full width */
+.oauth-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.oauth-btn {
+  display: flex;
+  font-family: var(--font-family-primary);
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-lg);
+  border-radius: var(--border-radius-md);
+  border: var(--border-width) solid transparent;
+  cursor: pointer;
+  font-weight: var(--font-weight-medium);
+  width: 100%;
+  font-size: var(--font-size-base);
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.oauth-icon {
+  width: 25px;
+  height: 25px;
+}
+
+/* Google button */
+.oauth-google {
+  background-color: #ffffff;
+  color: #000000;
+  border-color: #dadce0;
+}
+
+/* GitHub button */
+.oauth-github {
+  background-color: #000000;
+  color: #ffffff;
+}
+
+/* 1) Reduce spacing between title and rest */
+
+
+/* 2) Wider + shorter card */
+.card-login {
+  background-color: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--border-radius-lg);
+  max-width: 660px; /* wider than 420px */
+  padding: var(--spacing-lg) var(--spacing-xl); /* less vertical padding */
+  gap: var(--spacing-md);
+}
+
+/* 3) Signup button smaller on Y + softer hover */
+.card-login .btn-lg {
+  padding: 0.6rem 1.5rem; /* less vertical padding */
+  font-size: var(--font-size-base);
+}
+.card-login .btn-lg:hover {
+  box-shadow: 0 0px 0px rgba(157, 78, 221, 0.25); /* softer */
+}
+
+.form-input {
+  padding: 0.5rem var(--spacing-md); /* 6) taller inputs */
+  background-color: #000000;
+}
+.form-input:focus {
+  outline: none;
+}
+
+/* 5) OAuth buttons regular font + taller */
+.oauth-btn {
+  font-weight: var(--font-weight-normal); /* was medium */
+  padding: 0.5rem var(--spacing-lg);       /* more vertical */
+  font-size: var(--font-size-base);
+}
+
+#loginLink {
+  color: #00d4ff;
+}
+
+
+/* 1) Make OAuth and login/signup buttons the same height */
+.oauth-btn,
+.card-login .btn-lg {
+  padding: 0.75rem var(--spacing-lg); /* unify vertical size */
+  font-size: var(--font-size-base);
+  height: 48px; /* lock equal height */
+  line-height: 1; /* keep text centered */
+}
+
+/* 2) Signup button: no shadow, dark-cyan background */
+.card-login .btn-lg {
+  background-color: #007a99; /* darker shade of cyan */
+  border-color: #007a99;
+  color: #ffffff;
+  box-shadow: none; /* remove */
+}
+.card-login .btn-lg:hover {
+  background-color: #0099cc; /* slightly lighter cyan */
+  border-color: #0099cc;
+  box-shadow: none;
+}
+
+/* 3) OAuth buttons: hover = outline glow instead of color change */
+.oauth-btn:hover {
+
+
+  box-shadow: 0 5px 15px rgba(0, 212, 255, 0.2);
+}
+
+
+
+#loginLink {
+  color: #03a0c0;
+}
+
+#loginLink:hover {
+  color: #00d4ff;
+}
+
+/* Reset autofill styles */
+.form-input:-webkit-autofill,
+.form-input:-webkit-autofill:hover,
+.form-input:-webkit-autofill:focus,
+.form-input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--color-text-primary) !important;
+  -webkit-box-shadow: 0 0 0px 1000px var(--color-surface) inset;
+  box-shadow: 0 0 0px 1000px var(--color-surface) inset;
+  caret-color: var(--color-text-primary);
+
+  /* force font to persist */
+  font-family: var(--font-family-primary) !important;
+  font-size: var(--font-size-base) !important;
+  font-weight: var(--font-weight-normal) !important;
+}
+
+input:autofill {
+  font-family: var(--font-family-primary) !important;
+  font-size: 16px !important;
+}
+
+
+/* Ensure everything inside header is flex-centered */
+.header {
+  display: flex;
+  align-items: center;   /* vertical centering */
+  height: var(--header-height);
+}
+
+/* Let nav-container fill header height */
+.nav-container {
+  display: flex;
+  align-items: center;   /* center children on Y */
+  justify-content: space-between;
+  height: 100%;
+}
+
+/* Reset nav-menu so items center */
+.nav-menu {
+  display: flex;
+  align-items: center;   /* fix vertical alignment */
+  gap: var(--spacing-2xl);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+/* Nav links: match header height for proper centering */
+.nav-link-bar {
+  display: flex;              /* make link flex item */
+  align-items: center;        /* vertical align text */
+  height: 100%;               /* fill parent */
+  padding: 0 var(--spacing-sm);
+  line-height: 1;             /* avoid baseline shift */
+}
+
+
+/* Navigation container - ensure proper alignment */
+.nav-container {
+  max-width: var(--container-max-width);
+  margin: 0 auto;
+  padding: 0 var(--spacing-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between; /* This pushes brand left, menu right */
+  height: 100%;
+  width: 100%; /* Ensure full width */
+}
+
+/* Brand stays on the left */
+.nav-brand {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  background: linear-gradient(135deg, #56c6dc, #db6699);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  flex-shrink: 0; /* Prevent brand from shrinking */
+}
+
+/* Menu goes to the right */
+.nav-menu {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2xl);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  margin-left: auto; /* Extra push to the right if needed */
+}
+
+/* Ensure nav links are properly aligned */
+.nav-link-bar {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--spacing-sm);
+  line-height: 1;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-weight: var(--font-weight-medium);
+  transition: color var(--transition-fast);
+  position: relative;
+}
+
+.nav-link-bar:hover {
+  color: #00d4ff;
+}
+
+.nav-link-bar::after {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 2px;
+  bottom: -4px;
+  left: 0;
+  background-color: #00d4ff;
+  transition: width var(--transition-normal);
+}
+
+.nav-link-bar:hover::after {
+  width: 100%;
+}

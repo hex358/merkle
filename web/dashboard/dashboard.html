@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CertumTree - Application Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="dashboard/styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="nav-brand">CertumTree</div>
+        <div class="header-actions">
+            <span class="user-info">developer@example.com</span>
+            <button class="btn btn-secondary">Logout</button>
+        </div>
+    </header>
+
+    <!-- Dashboard Container -->
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2 class="sidebar-title">API Services</h2>
+                <button class="btn" onclick="showNewServiceModal()">+ New Service</button>
+            </div>
+            <div class="service-list" id="serviceList">
+                <!-- Services will be populated here -->
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="empty-state" id="emptyState">
+                <h3>No services configured</h3>
+                <p>Create your first API service to get started with CertumTree integration.</p>
+            </div>
+
+            <div class="service-details" id="serviceDetails">
+                <div class="content-header">
+                    <div>
+                        <h1 class="content-title" id="serviceTitle">Service Name</h1>
+                        <p class="content-subtitle" id="serviceSubtitle">Manage your API service configuration</p>
+                    </div>
+                </div>
+
+                <!-- API Token Section -->
+                <div class="details-section">
+                    <div class="details-section-header">
+                        <h3 class="details-section-title">API Access Token</h3>
+                    </div>
+                    <div class="details-section-content">
+                        <div class="token-section">
+                            <p style="color: #888; margin-bottom: 15px;">Use this token to authenticate your API requests to CertumTree.</p>
+                            <div class="token-display" id="tokenDisplay">
+                                <!-- Token will be displayed here -->
+                            </div>
+                            <div class="action-buttons">
+                                <button class="btn" onclick="toggleToken()" id="show-tok">Show Token</button>
+                                <button class="btn btn-secondary" onclick="regenerateToken()">Regenerate</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Metadata Section -->
+                <div class="details-section">
+                    <div class="details-section-header">
+                        <h3 class="details-section-title">Service Metadata</h3>
+                    </div>
+                    <div class="details-section-content">
+                        <div class="metadata-grid" id="metadataGrid">
+                            <!-- Metadata fields will be populated here -->
+                        </div>
+                        <div class="action-buttons">
+                            <button class="btn" onclick="saveMetadata()">Save Changes</button>
+                            <button class="btn btn-secondary" onclick="addMetadataField()">Add Field</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Danger Zone -->
+                <div class="details-section danger-zone">
+                    <div class="details-section-header">
+                        <h3 class="details-section-title">Danger Zone</h3>
+                    </div>
+                    <div class="details-section-content">
+                        <p style="color: #dc3545; margin-bottom: 15px;">Once you delete a service, there is no going back. Please be certain.</p>
+                        <button class="btn btn-danger" onclick="showDeleteModal()">Delete Service</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- New Service Modal -->
+    <div class="modal-overlay" id="newServiceModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Create New Service</h3>
+                <p style="color: #888;">Enter a unique name for your API service.</p>
+            </div>
+            <div class="modal-content">
+                <div class="form-group">
+                    <label class="form-label">Service Name</label>
+                    <input type="text" class="form-input" id="newServiceName" placeholder="my-awesome-app" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" name="">
+                </div>
+                <div id="serviceNameError" style="color: #dc3545; font-size: 0.9rem; margin-top: -15px; margin-bottom: 15px; display: none;">
+                    Service name already exists. Please choose a different name.
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal('newServiceModal')">Cancel</button>
+                <button class="btn" onclick="createService()">Create Service</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" id="deleteModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Delete Service</h3>
+                <p style="color: #dc3545;">This action cannot be undone.</p>
+            </div>
+            <div class="modal-content">
+                <p>Are you sure you want to delete "<span id="deleteServiceName"></span>"?</p>
+                <p style="color: #888; margin-top: 10px;">This will permanently remove the service and invalidate all associated API tokens.</p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal('deleteModal')">Cancel</button>
+                <button class="btn btn-danger" onclick="confirmDelete()">Delete Service</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="common/utils.js"></script>
+   <script src="dashboard/dashboard.js"></script>
+</body>
+</html>

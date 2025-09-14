@@ -7,7 +7,7 @@ from database.interface import (
 	encode_val, decode_val, Start, open_environment
 )
 
-Start(4096, False, 30000)
+Start(1024, False, 30000)
 
 
 def _lvl_key(level: int) -> bytes:
@@ -63,17 +63,18 @@ def kief(*args: Any) -> bytes:
 
 def get_meta(name: bytes):
 	try:
-		return StoredDict(name=b"__services")[name]
-	except:
+		return db_boosts.deserialize(StoredDict(name=b"__services")[name])
+	except Exception as e:
 		return None
 
 def has_service(name: str):
 	return name.encode() in StoredDict(name=b"__services")
 
-def set_service(name: str, value: bytes) -> bool:
+import db_boosts
+def set_service(name: str, meta: dict) -> bool:
 	if has_service(name):
 		map = StoredDict(name=b"__services")
-		map[name.encode()] = value
+		map[name.encode()] = db_boosts.serialize(meta)
 		map.flush_buffer()
 		return True
 	else:
@@ -81,12 +82,12 @@ def set_service(name: str, value: bytes) -> bool:
 
 
 class MerkleService:
-	def __init__(self, subenv_name: str, value: bytes = b""):
+	def __init__(self, subenv_name: str, meta: dict = {}):
 		if not has_service(subenv_name):
 			map = StoredDict(name=b"__services")
-			map[subenv_name.encode()] = value
+			map[subenv_name.encode()] = db_boosts.serialize(meta)
 			map.flush_buffer()
-		env = open_environment(subenv_name, 1024, False, 30000)
+		env = open_environment(subenv_name, 1024, False, 2*22)
 		self.env = env
 
 		# general list of hashes
@@ -317,12 +318,14 @@ def client_check(bundle: Dict[str, Any]) -> bool:
     return h == expected
 
 # # ---------- quick bench ----------
-# from time import perf_counter
-#
+from time import perf_counter
+
 # if __name__ == "__main__":
 # 	# t = perf_counter()
 # 	svc = MerkleService("miuff")
-# 	# for i in range(50000):
-# 	# 	svc.add(kief(str(i).encode("ascii")))
-# 	# svc.flush()
-# 	print(client_check(svc.server_check(kief(str(2).encode("ascii")))))
+# 	for i in range(5000):
+# 		svc.add(kief(str(i).encode("ascii")))
+# 	svc.flush()
+# 	t = perf_counter()
+# 	print(client_check(svc.server_check(kief(str(435).encode("ascii")))))
+# 	print(perf_counter() - t)

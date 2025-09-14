@@ -66,17 +66,22 @@ class Services:
 
     @classmethod
     def register(cls, name: str, metadata: dict) -> str:
-        if name not in cached_services:
+        if not name in cached_services:
             cached_services[name] = mmr.MerkleService(name)
         return "1234567"
 
     @classmethod
     def update(cls, token: str, metadata: dict) -> bool:
+        for k,v in metadata.items():
+            metadata[k.encode()] = v.encode()
+        mmr.set_service("gg", metadata)
         return True  # placeholder
 
     @classmethod
     def get_metadata(cls, name: str) -> dict:
-        stored = mmr.get_meta(name)
+        stored = mmr.get_meta(name.encode())
+        for k,v in stored.items():
+            stored[k.decode()] = v.decode()
         if stored is None:
             raise NameError(f"Service {name} doesn't exist")
         return stored
@@ -107,6 +112,18 @@ async def update_service(request):
         return sanic_json({"status": "ERR", "message": "Invalid service"})
     return sanic_json({"status": "OK" if Services.update(request.json["token"], request.json["metadata"]) else "ERR"})
 
+@app.get("/list_services")
+async def list_services(_):
+    result = []
+    for name in ["gg"]:
+        result.append({
+            "service_name": name,
+            "metadata": Services.get_metadata(name),
+            "token": "hidden"  # you can return token or not, depending on policy
+        })
+    return sanic_json({"status": "OK", "services": result})
+
+
 @app.post("/add_blob")
 @contract({"token": (0, str), "service_name": (0, str), "blob_hash": (16, str)})
 async def add_blob(request):
@@ -116,6 +133,20 @@ async def add_blob(request):
     merkle_service.add(bytes.fromhex(request.json["blob_hash"]))
     merkle_service.flush()
     return sanic_json({"status": "OK", "message": ""})
+
+@app.post("/update_token")
+@contract({"username": (0, str), "password": (0, str)})
+async def update_token(request):
+    # Returns newly generated token. Feed the requests any username/pass pair, assume it will work.
+    # I will implement this on backend later, act as it returns {"token" : ...}
+    pass
+
+@app.get("/get_token")
+@contract({"username": (0, str), "password": (0, str)})
+async def get_token(request):
+    # Returns generated token. Feed the requests any username/pass pair, assume it will work.
+    # I will implement this on backend later, act as it returns {"token" : ...}
+    pass
 
 @app.post("/check_blob")
 @contract({"service_name": (0, str), "blob_hash": (16, str)})
@@ -132,10 +163,20 @@ async def get_service(request):
     name = request.json["service_name"]
     if not Services.service_exists(name):
         return sanic_json({"status": "ERR", "message": "Service doesn't exist"})
+    print(Services.get_metadata(name))
     return sanic_json({"status": "OK", "metadata": Services.get_metadata(name), "message": ""})
 
 @app.route("/")
 async def index(_): return html(router.read("index"))
+
+@app.route("/signup")
+async def signup(_): return html(router.read("signup"))
+
+@app.route("/dashboard")
+async def dashboard(_): return html(router.read("dashboard"))
+
+@app.route("/login")
+async def login(_): return html(router.read("login"))
 
 from sanic.response import file
 from pathlib import Path
