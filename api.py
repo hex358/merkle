@@ -137,14 +137,28 @@ async def get_service(request):
 @app.route("/")
 async def index(_): return html(router.read("index"))
 
-@app.route("/<file:path>")
-async def serve_asset(_, file: str):
-    sp, ext = file.split(".")
-    page, asset = sp.split("/")
+from sanic.response import file
+from pathlib import Path
+@app.route("/<filepath:path>")
+async def serve_asset(_, filepath: str):
+    path = Path(filepath)
+
+    if len(path.parts) < 2 or not path.suffix:
+        raise NotFound("Invalid asset path")
+
+    ext = path.suffix.lstrip(".").lower()
+    page = path.parts[0]
+    asset = "/".join(path.parts[1:])
+
     if ext == "css":
-        return text(router.read(page, "css", asset+"."+ext), content_type="text/css")
+        return text(router.read(page, "css", asset), content_type="text/css")
+
     elif ext == "js":
-        return text(router.read(page, "js", asset+"."+ext), content_type="application/javascript")
+        return text(router.read(page, "js", asset), content_type="application/javascript")
+
+    elif ext in ("png", "jpg", "jpeg", "gif", "svg", "webp", "ico"):
+        return await file(f"web/{page}/{asset}")
+
     else:
         raise NotFound(f"Unknown asset type: {ext}")
 

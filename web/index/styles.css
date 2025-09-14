@@ -348,7 +348,7 @@ body {
 }
 
 .service-card:hover {
-    transform: scale(1.0);
+    transform: scale(1.01);
     border-color: #00d4ff;
     box-shadow: 0 5px 15px rgba(0, 212, 255, 0.2);
 }
@@ -501,6 +501,24 @@ body {
 }
 
 
+.offering-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between; /* title/desc at top, img at bottom */
+  align-items: center;            /* ⬅ centers horizontally */
+  padding: 1rem 1rem 3rem;        /* add bottom padding */
+}
+
+.offering-icon {
+  width: 64px;
+  height: 64px;
+  margin-top: 0.8rem;   /* push image to bottom */
+  margin-bottom: 0.0rem;
+  margin-right: 0.5rem;
+  display: block;     /* avoid inline baseline quirks */
+}
+
 .header {
   background-color: #1313137d; /* lighter than background */
 }
@@ -529,3 +547,147 @@ body {
   position: relative;
   z-index: 1; /* keep text above particles */
 }
+
+
+/* ==========================================================================
+   BUTTON COMPONENT
+   ========================================================================== */
+
+/* Button Base Styles */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+
+  font-family: var(--font-family-primary);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+
+  border: var(--border-width) solid;
+  border-radius: var(--border-radius-lg);
+
+  background: transparent;
+  color: inherit;
+
+  cursor: pointer;
+  transition: all var(--transition-normal);
+
+  /* Prevent text selection */
+  user-select: none;
+  -webkit-user-select: none;
+
+  /* Remove button default styles */
+  outline: none;
+  appearance: none;
+}
+
+/* Size variants */
+.btn-xs {
+  padding: calc(var(--spacing-xs) * 0.5) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  border-radius: var(--border-radius-sm);
+}
+
+.btn-sm {
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-size: var(--font-size-sm);
+  border-radius: var(--border-radius-md);
+}
+
+.btn-md {
+  padding: var(--spacing-sm) var(--spacing-lg);
+  font-size: var(--font-size-base);
+}
+
+.btn-lg {
+  padding: var(--spacing-md) var(--spacing-xl);
+  font-size: var(--font-size-lg);
+  border-radius: var(--border-radius-xl);
+}
+
+/* Color variants - using CSS custom properties for dynamic colors */
+.btn[data-fill][data-outline] {
+  background-color: var(--btn-fill-color);
+  border-color: var(--btn-outline-color);
+  color: var(--btn-text-color, #ffffff);
+}
+
+.btn[data-fill][data-outline]:hover {
+  background-color: var(--btn-fill-hover, var(--btn-fill-color));
+  border-color: var(--btn-outline-hover, var(--btn-outline-color));
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px var(--btn-shadow, rgba(0, 0, 0, 0.3));
+}
+
+.btn[data-fill][data-outline]:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 10px var(--btn-shadow, rgba(0, 0, 0, 0.2));
+}
+
+/* Outline-only variant */
+.btn-outline[data-outline] {
+  background-color: transparent;
+  border-color: var(--btn-outline-color);
+  color: var(--btn-outline-color);
+}
+
+.btn-outline[data-outline]:hover {
+  background-color: var(--btn-outline-color);
+  color: #ffffff;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px var(--btn-shadow, rgba(0, 0, 0, 0.3));
+}
+
+/* Ghost variant */
+.btn-ghost[data-fill] {
+  background-color: var(--btn-fill-color);
+  border-color: var(--btn-fill-color);
+  color: #ffffff;
+  opacity: 0.8;
+}
+
+.btn-ghost[data-fill]:hover {
+  opacity: 1;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px var(--btn-shadow, rgba(0, 0, 0, 0.3));
+}
+
+/* Pre-defined color classes using your color palette */
+.btn-primary {
+  --btn-fill-color: var(--color-accent);
+  --btn-outline-color: var(--color-accent-hover);
+  --btn-fill-hover: var(--color-accent-hover);
+  --btn-shadow: rgba(157, 78, 221, 0.4);
+}
+
+.btn-cyan {
+  --btn-fill-color: #00d4ff;
+  --btn-outline-color: #0099cc;
+  --btn-fill-hover: #00b8e6;
+  --btn-shadow: rgba(0, 212, 255, 0.4);
+}
+
+.btn-magenta {
+  --btn-fill-color: #ff006e;
+  --btn-outline-color: #cc0055;
+  --btn-fill-hover: #e6005d;
+  --btn-shadow: rgba(255, 0, 110, 0.4);
+}
+
+/* Button groups */
+.btn-group {
+  display: inline-flex;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.btn-group-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  align-items: stretch;
+}
+
+
