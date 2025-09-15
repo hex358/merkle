@@ -194,6 +194,10 @@ body {
     background: #dc3545;
 }
 
+.btn-danger:hover {
+    background: #db5966;
+}
+
 .btn-ghost-danger {
     background: #dc354500;
     border: 2px solid #b53441;

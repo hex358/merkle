@@ -59,7 +59,7 @@
                                 <!-- Token will be displayed here -->
                             </div>
                             <div class="action-buttons">
-                                <button class="btn" onclick="toggleToken()" id="show-tok">Show Token</button>
+                                <button class="btn" onclick="toggleToken(event)" id="show-tok">Show Token</button>
                                 <button class="btn btn-secondary" onclick="regenerateToken()">Regenerate</button>
                             </div>
                         </div>
@@ -70,13 +70,13 @@
                 <div class="details-section">
                     <div class="details-section-header">
                         <h3 class="details-section-title">Service Metadata</h3>
+                            <button class="btn btn-small" onclick="saveMetadata()">Save Changes</button>
                     </div>
                     <div class="details-section-content">
                         <div class="metadata-grid" id="metadataGrid">
                             <!-- Metadata fields will be populated here -->
                         </div>
                         <div class="action-buttons">
-                            <button class="btn" onclick="saveMetadata()">Save Changes</button>
                             <button class="btn btn-secondary" onclick="addMetadataField()">Add Field</button>
                         </div>
                     </div>
@@ -137,6 +137,7 @@
         </div>
     </div>
 
+    <script src="common/utils.js"></script>
     <script src="common/utils.js"></script>
    <script src="dashboard/dashboard.js"></script>
 </body>

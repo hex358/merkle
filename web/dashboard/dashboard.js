@@ -1,25 +1,9 @@
-// ================== CONFIG ==================
-const BACKEND_URL = "http://localhost:8000";
 
 // ================== STATE ==================
 let services = {}; // local cache synced with backend
 let currentService = null;
 let tokenVisible = false;
 
-// ================== API HELPERS ==================
-async function apiPost(path, data) {
-    const res = await fetch(`${BACKEND_URL}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data)
-    });
-    return res.json();
-}
-
-async function apiGet(path, params) {
-    const res = await fetch(`${BACKEND_URL}${path}?${new URLSearchParams(params)}`);
-    return res.json();
-}
 
 // ================== INIT ==================
 async function init() {
@@ -66,7 +50,7 @@ async function selectService(serviceName) {
     tokenVisible = false;
 
     // fetch metadata from backend
-    const response = await apiPost("/get_service", { service_name: serviceName });
+    const response = await apiGet("/get_service_metadata", { service_name: serviceName });
     if (response.status === "OK") {
         services[serviceName].metadata = response.metadata;
     }
@@ -151,14 +135,34 @@ async function createService() {
 }
 
 // ================== TOKEN MGMT ==================
-function toggleToken(event) {
+async function toggleToken(event) {
     tokenVisible = !tokenVisible;
     const tokenDisplay = document.getElementById('tokenDisplay');
     const button = event.target;
 
+    if (tokenVisible && currentService) {
+        const serviceAtRequest = currentService; // snapshot
+        try {
+            const response = await apiPost("/get_token", { "service_name": serviceAtRequest, "password": "dummy", "username": "dummy" });
+            if (response.status === "OK" && currentService === serviceAtRequest) {
+                services[serviceAtRequest].token = response.token;
+                tokenDisplay.textContent = response.token;
+            } else if (currentService !== serviceAtRequest) {
+                console.log("⚠️ Ignoring token response for stale service:", serviceAtRequest);
+            } else {
+                console.error("❌ Failed to fetch token:", response.message);
+                tokenVisible = false;
+            }
+        } catch (err) {
+            console.error("❌ Error fetching token:", err);
+            tokenVisible = false;
+        }
+    }
+
     tokenDisplay.classList.toggle('visible', tokenVisible);
     button.textContent = tokenVisible ? 'Hide Token' : 'Show Token';
 }
+
 
 async function regenerateToken() {
     if (currentService) {
@@ -246,14 +250,13 @@ function updateMetadata() {
 
 async function saveMetadata() {
     updateMetadata();
-    console.log("a");
     if (!currentService) return;
-    console.log("b");
 
     const response = await apiPost("/update_service", {
-        service_name: currentService,
-        token: services[currentService].token,
-        metadata: services[currentService].metadata
+        "service_name": "currentService",
+        "username": "dummy",
+        "password": "dummy",
+        "metadata": services[currentService].metadata
     });
 
     if (response.status === "OK") {

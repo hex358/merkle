@@ -53,7 +53,7 @@
         <input type="" name="" placeholder="Username" required class="form-input">
         <input type="" name="" placeholder="Password" required class="form-input">
         <input type="" name="" placeholder="Confirm Password" required class="form-input">
-
+        <div id="loginError" style="color:#dc3545; font-size:0.9rem; display:none;"></div>
         <button type="submit" class="btn btn-magenta btn-lg"
                 data-outline="#9d4edd" data-fill="#9d4edd">Sign Up</button>
       </form>
@@ -67,18 +67,7 @@
 </main>
 
 
-
-  <script>
-    // Dummy signup submit
-    document.getElementById("signupForm").addEventListener("submit", e => {
-      e.preventDefault();
-    });
-
-    // Dummy login request
-    document.getElementById("loginLink").addEventListener("click", e => {
-      e.preventDefault();
-      window.location.href = "/login";
-    });
-  </script><script src="common/utils.js"></script>
+<script src="common/utils.js"></script>
+<script src="signup/signup.js"></script>
 </body>
 </html>

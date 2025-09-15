@@ -5,6 +5,7 @@ from functools import wraps
 from sanic import Sanic, html, text
 from sanic import json as sanic_json
 from sanic.exceptions import NotFound, InvalidUsage
+import uuid
 
 # project modules
 import web.app_router as router
@@ -43,6 +44,7 @@ def contract(structure: dict):
         async def wrapper(request, *args, **kwargs):
             received = request.json or {}
             err = sanic_json({"status": "ERR", "message": f"Incorrect data format: expected {structure}"})
+            print(received)
 
             for k, spec in structure.items():
                 if k not in received: return err
@@ -72,19 +74,21 @@ class Services:
 
     @classmethod
     def update(cls, token: str, metadata: dict) -> bool:
+        new_meta = {}
         for k,v in metadata.items():
-            metadata[k.encode()] = v.encode()
-        mmr.set_service("gg", metadata)
+            new_meta[k.encode()] = v.encode()
+        mmr.set_service("gg", new_meta)
         return True  # placeholder
 
     @classmethod
     def get_metadata(cls, name: str) -> dict:
         stored = mmr.get_meta(name.encode())
-        for k,v in stored.items():
-            stored[k.decode()] = v.decode()
         if stored is None:
             raise NameError(f"Service {name} doesn't exist")
-        return stored
+        new_stored = {}
+        for k,v in stored.items():
+            new_stored[k.decode()] = v.decode()
+        return new_stored
 
     @classmethod
     def service_exists(cls, name: str) -> bool:
@@ -106,11 +110,11 @@ async def register_service(request):
     return sanic_json({"status": "OK", "service_token": token, "message": ""})
 
 @app.post("/update_service")
-@contract({"token": (0, str), "service_name": (0, str), "metadata": (0, dict)})
+@contract({"username": (0, str),"password": (0, str), "service_name": (0, str), "metadata": (0, dict)})
 async def update_service(request):
-    if not Services.try_login(request.json["service_name"], request.json["token"]):
-        return sanic_json({"status": "ERR", "message": "Invalid service"})
-    return sanic_json({"status": "OK" if Services.update(request.json["token"], request.json["metadata"]) else "ERR"})
+    #if not Services.try_login(request.json["service_name"], request.json["token"]):
+   #     return sanic_json({"status": "ERR", "message": "Invalid service"})
+    return sanic_json({"status": "OK" if Services.update(request.json["service_name"], request.json["metadata"]) else "ERR"})
 
 @app.get("/list_services")
 async def list_services(_):
@@ -119,7 +123,16 @@ async def list_services(_):
         result.append({
             "service_name": name,
             "metadata": Services.get_metadata(name),
-            "token": "hidden"  # you can return token or not, depending on policy
+        })
+    return sanic_json({"status": "OK", "services": result})
+
+@app.get("/get_my_services")
+async def get_my_services(request):
+    result = []
+    for name in ["gg"]:
+        result.append({
+            "service_name": name,
+            "metadata": Services.get_metadata(name),
         })
     return sanic_json({"status": "OK", "services": result})
 
@@ -139,14 +152,26 @@ async def add_blob(request):
 async def update_token(request):
     # Returns newly generated token. Feed the requests any username/pass pair, assume it will work.
     # I will implement this on backend later, act as it returns {"token" : ...}
-    pass
+    return sanic_json({"status": "OK", "token": "fff", "message": ""})
 
-@app.get("/get_token")
-@contract({"username": (0, str), "password": (0, str)})
+@app.post("/get_token")
+@contract({"service_name": (0, str), "username": (0, str), "password": (0, str)})
 async def get_token(request):
     # Returns generated token. Feed the requests any username/pass pair, assume it will work.
     # I will implement this on backend later, act as it returns {"token" : ...}
-    pass
+    return sanic_json({"status": "OK", "token": "hihi", "message": ""})
+
+@app.post("/user_login")
+@contract({"username": (0, str), "password": (0, str)})
+async def user_login(request):
+    # Login
+    return sanic_json({"status": "OK", "message": ""})
+
+@app.post("/user_signup")
+@contract({"username": (0, str), "password": (0, str)})
+async def user_signup(request):
+    # Signup
+    return sanic_json({"status": "OK", "message": ""})
 
 @app.post("/check_blob")
 @contract({"service_name": (0, str), "blob_hash": (16, str)})
@@ -157,14 +182,22 @@ async def check_blob(request):
     bundle = get_service_obj(name).server_check(bytes.fromhex(request.json["blob_hash"]))
     return sanic_json({"status": "OK", "bundle": bundle, "message": ""})
 
-@app.post("/get_service")
+@app.get("/get_service_metadata")
 @contract({"service_name": (0, str)})
-async def get_service(request):
+async def get_service_metadata(request):
     name = request.json["service_name"]
     if not Services.service_exists(name):
         return sanic_json({"status": "ERR", "message": "Service doesn't exist"})
-    print(Services.get_metadata(name))
     return sanic_json({"status": "OK", "metadata": Services.get_metadata(name), "message": ""})
+
+@app.get("/get_service_token")
+@contract({"username": (0, str), "password": (0, str)})
+async def get_service_token(request):
+    pass
+    # Compare hashes of given password and password in the database,
+    # then decrypt the stored hash with the sent password.
+    return sanic_json({"status": "OK", "token": "sjsjsjs", "message": ""})
+
 
 @app.route("/")
 async def index(_): return html(router.read("index"))
