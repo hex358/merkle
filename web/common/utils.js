@@ -48,6 +48,27 @@ function delay(fn, ms) {
 
 const BACKEND_URL = "";
 // ================== API HELPERS ==================
+// ================== ROUTE GUARD ==================
+document.addEventListener("DOMContentLoaded", () => {
+    const creds = getCredentials();
+    const path = window.location.pathname;
+
+    const loggedIn = !!creds;
+    const guestOnly = ["/login", "/signup"];
+    const protectedOnly = ["/dashboard"];
+
+    if (!loggedIn && protectedOnly.includes(path)) {
+        // not logged in but trying to access a protected page
+        window.location.href = "/login";
+    }
+    if (loggedIn && guestOnly.includes(path)) {
+        // already logged in but trying to access login/signup
+        window.location.href = "/dashboard";
+    }
+});
+
+
+
 
 // Unified request helper so GET/POST behave identically
 async function apiRequest(method, path, data = null, opts = {}) {
@@ -96,6 +117,13 @@ function saveCredentials(username, password) {
 
 function clearCredentials() {
     localStorage.removeItem(AUTH_KEY);
+    const protectedOnly = ["/dashboard"];
+    const path = window.location.pathname;
+
+    if (protectedOnly.includes(path)) {
+        // not logged in but trying to access a protected page
+        window.location.href = "/login";
+    }
 }
 
 function getCredentials() {
@@ -121,6 +149,7 @@ async function tryAutoLogin() {
         }
     } catch (err) {
         console.error("Auto-login error:", err);
+
         return false;
     }
 }
@@ -138,5 +167,5 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function logout() {
     clearCredentials();
     //await apiPost("/logout", {}); // optional, if backend supports
-    window.location.href = "/login";
+    window.location.href = "/";
 }

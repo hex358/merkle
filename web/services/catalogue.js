@@ -1,279 +1,252 @@
-// Mock API function - replace with your actual implementation
-async function apiPostMock(endpoint, data) {
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, Math.random() * 300 + 200));
-
-    // Mock fuzzy search data generator
-    const generateMockServices = (page, number, filter) => {
-        const allMockNames = [
-            'google/gemini', 'google/gmail', 'google/drive', 'google/maps',
-            'openai/gpt-4', 'openai/whisper', 'openai/dall-e', 'openai/codex',
-            'anthropic/claude', 'anthropic/constitutional-ai',
-            'microsoft/copilot', 'microsoft/azure', 'microsoft/teams',
-            'meta/llama', 'meta/prophet', 'meta/react',
-            'github/actions', 'github/copilot', 'github/api',
-            'aws/lambda', 'aws/s3', 'aws/ec2', 'aws/rds',
-            'stripe/payments', 'stripe/billing', 'stripe/connect',
-            'mongodb/atlas', 'mongodb/compass', 'mongodb/realm',
-            'docker/registry', 'docker/compose', 'docker/swarm',
-            'kubernetes/api', 'kubernetes/ingress', 'kubernetes/helm'
-        ];
-
-        let filteredNames = allMockNames;
-
-        // Server-side fuzzy search simulation
-        if (filter && filter.trim()) {
-            const query = filter.toLowerCase().trim();
-            filteredNames = allMockNames.filter(name => {
-                const nameLower = name.toLowerCase();
-                // Exact matches get priority
-                if (nameLower.includes(query)) return true;
-
-                // Fuzzy matching - allow for typos and partial matches
-                const [org, service] = name.split('/');
-                const orgLower = org.toLowerCase();
-                const serviceLower = service.toLowerCase();
-
-                // Check if query matches org or service with some fuzziness
-                return (
-                    orgLower.includes(query) ||
-                    serviceLower.includes(query) ||
-                    this.fuzzyMatch(query, orgLower) ||
-                    this.fuzzyMatch(query, serviceLower)
-                );
-            });
-
-            // Sort by relevance (exact matches first)
-            filteredNames.sort((a, b) => {
-                const aLower = a.toLowerCase();
-                const bLower = b.toLowerCase();
-                const aExact = aLower.includes(query);
-                const bExact = bLower.includes(query);
-
-                if (aExact && !bExact) return -1;
-                if (!aExact && bExact) return 1;
-                return 0;
-            });
-        }
-
-        // Pagination
-        const startIndex = page * number;
-        const endIndex = startIndex + number;
-        const paginatedNames = filteredNames.slice(startIndex, endIndex);
-
-        const services = paginatedNames.map((name, index) => {
-            const [org, service] = name.split('/');
-            return {
-                id: startIndex + index,
-                name: name,
-                org: org,
-                service: service
-            };
-        });
-
-        return {
-            services,
-            hasMore: endIndex < filteredNames.length,
-            total: filteredNames.length,
-            page: page,
-            query: filter
-        };
-    };
-
-    // Simple fuzzy matching helper
-    this.fuzzyMatch = (query, target) => {
-        if (!query || !target) return false;
-        if (query.length > target.length) return false;
-
-        let queryIndex = 0;
-        for (let i = 0; i < target.length && queryIndex < query.length; i++) {
-            if (target[i] === query[queryIndex]) {
-                queryIndex++;
-            }
-        }
-
-        return queryIndex === query.length;
-    };
-
-    if (endpoint === 'get_results') {
-        return generateMockServices(data.page, data.number, data.filter);
-    }
-
-    throw new Error('Unknown endpoint');
-}
-
 class ServiceList {
-    constructor() {
-        this.currentPage = 0;
-        this.itemsPerPage = 12;
-        this.currentFilter = '';
-        this.isLoading = false;
-        this.hasMore = true;
-        this.services = [];
-        this.searchTimeout = null;
+	constructor() {
+		this.itemsPerPage = 12;
+		this.currentFilter = '';
+		this.isLoading = false;
+		this.hasMore = true;
+		this.services = [];
+		this.nextPageId = "1";
+		this.requestGen = 0;
 
-        this.initializeElements();
-        this.setupEventListeners();
-        this.loadServices();
-    }
+		this.loadScheduled = false; // coalesce triggers
+		this.rafId = null;          // throttle scroll/resize
+		this.lastPageUsed = null;   // monotonic guard
 
-    initializeElements() {
-        this.searchInput = document.getElementById('searchInput');
-        this.servicesGrid = document.getElementById('servicesGrid');
-        this.loadingIndicator = document.getElementById('loadingIndicator');
-        this.noResults = document.getElementById('noResults');
-        this.resultsInfo = document.getElementById('resultsInfo');
-    }
+		this.initializeElements();
+		this.setupEventListeners();
+		this.setupInfiniteObserver();
 
-    setupEventListeners() {
-        // Search input with debounce
-        this.searchInput.addEventListener('input', (e) => {
-            clearTimeout(this.searchTimeout);
-            this.searchTimeout = setTimeout(() => {
-                this.handleSearch(e.target.value);
-            }, 300);
-        });
+		// kick off initial batch via scheduler (not direct) to avoid re-entrancy
+		this.scheduleLoad();
+	}
 
-        // Infinite scroll
-        window.addEventListener('scroll', () => {
-            if (this.shouldLoadMore()) {
-                this.loadServices();
-            }
-        });
-    }
+	getScrollParent(el) {
+		let p = el?.parentElement;
+		while (p) {
+			const s = getComputedStyle(p);
+			if (/(auto|scroll|overlay)/.test(s.overflowY + s.overflowX + s.overflow)) {
+				return p;
+			}
+			p = p.parentElement;
+		}
+		return null;
+	}
 
-    shouldLoadMore() {
-        const scrollTop = window.pageYOffset;
-        const windowHeight = window.innerHeight;
-        const documentHeight = document.documentElement.scrollHeight;
+	initializeElements() {
+		this.searchInput = document.getElementById('searchInput');
+		this.servicesGrid = document.getElementById('servicesGrid');
+		this.loadingIndicator = document.getElementById('loadingIndicator');
+		this.noResults = document.getElementById('noResults');
+		this.resultsInfo = document.getElementById('resultsInfo');
 
-        return (
-            !this.isLoading &&
-            this.hasMore &&
-            scrollTop + windowHeight >= documentHeight - 1000
-        );
-    }
+		this.sentinel = document.createElement('div');
+		this.sentinel.id = 'infinite-sentinel';
+		this.sentinel.style.height = '1px';
+		this.sentinel.style.width = '100%';
+		this.servicesGrid.appendChild(this.sentinel);
 
-    async handleSearch(query) {
-        this.currentFilter = query;
-        this.resetPagination();
-        await this.loadServices();
-    }
+		this.scrollRoot = this.getScrollParent(this.servicesGrid);
 
-    resetPagination() {
-        this.currentPage = 0;
-        this.hasMore = true;
-        this.services = [];
-        this.servicesGrid.innerHTML = '';
-    }
+		const onPassiveCheck = () => {
+			if (this.rafId) return;
+			this.rafId = requestAnimationFrame(() => {
+				this.rafId = null;
+				this.scheduleLoad();
+			});
+		};
+		(this.scrollRoot || window).addEventListener('scroll', onPassiveCheck, { passive: true });
+		window.addEventListener('resize', onPassiveCheck, { passive: true });
 
-    async loadServices() {
-        if (this.isLoading || !this.hasMore) return;
+		this.resizeObs = new ResizeObserver(() => this.scheduleLoad());
+		this.resizeObs.observe(this.servicesGrid);
+	}
 
-        this.isLoading = true;
-        this.showLoading(true);
+	setupEventListeners() {
+		let t = null;
+		this.searchInput.addEventListener('input', (e) => {
+			clearTimeout(t);
+			t = setTimeout(() => this.handleSearch(e.target.value), 300);
+		});
+	}
 
-        try {
-            const response = await apiPost('list_services', {
-                page_id: this.currentPage,
-                num_results: this.itemsPerPage,
-                filter: this.currentFilter,
-                username: getCredentials() ? getCredentials().username : "",
-            });
+	setupInfiniteObserver() {
+		if (this.io) this.io.disconnect();
+		this.io = new IntersectionObserver((entries) => {
+			for (const entry of entries) {
+				if (entry.isIntersecting) this.scheduleLoad();
+			}
+		}, {
+			root: this.scrollRoot || null,
+			rootMargin: '800px 0px 800px 0px',
+			threshold: 0
+		});
+		this.io.observe(this.sentinel);
+	}
 
-            // For search queries, reset the grid on first page
-            if (this.currentPage === 0) {
-                this.services = [];
-                this.servicesGrid.innerHTML = '';
-            }
+	isSentinelVisible() {
+		const rootEl = this.scrollRoot;
+		const rect = this.sentinel.getBoundingClientRect();
+		const vh = (rootEl ? rootEl.clientHeight : window.innerHeight) || 0;
+		return rect.top < vh + 800 && rect.bottom > -800;
+	}
 
-            this.services.push(...response.services);
-            this.hasMore = response.hasMore;
-            this.currentPage++;
+	scheduleLoad() {
+		if (this.loadScheduled || this.isLoading || !this.hasMore) return;
+		if (!this.isSentinelVisible()) return;
+		this.loadScheduled = true;
+		queueMicrotask(async () => {
+			this.loadScheduled = false;
+			// re-check conditions right before loading
+			if (!this.isLoading && this.hasMore && this.isSentinelVisible()) {
+				await this.loadServices();
+			}
+		});
+	}
 
-            this.renderServices(response.services);
-            this.updateResultsInfo(response);
+	resetPagination() {
+		this.hasMore = true;
+		this.services = [];
+		this.servicesGrid.innerHTML = '';
 
-            if (this.services.length === 0) {
-                this.showNoResults(true);
-            } else {
-                this.showNoResults(false);
-            }
+		this.nextPageId = "1";
+		this.lastPageUsed = null;
 
-        } catch (error) {
-            console.error('Failed to load services:', error);
-            this.updateResultsInfo(null, 'Error loading services');
-        } finally {
-            this.isLoading = false;
-            this.showLoading(false);
-        }
-    }
+		this.sentinel = document.createElement('div');
+		this.sentinel.id = 'infinite-sentinel';
+		this.sentinel.style.height = '1px';
+		this.sentinel.style.width = '100%';
+		this.servicesGrid.appendChild(this.sentinel);
 
-    renderServices(services) {
-        services.forEach(service => {
-            const serviceCard = this.createServiceCard(service);
-            this.servicesGrid.appendChild(serviceCard);
-        });
-    }
+		this.setupInfiniteObserver();
+		this.scheduleLoad();
+	}
 
-    createServiceCard(service) {
-        const card = document.createElement('div');
-        card.className = 'service-card';
-        card.innerHTML = `
-            <div class="service-name">
-                <dark>${service.org}</dark>/${service.service}
-            </div>
-        `;
+	async handleSearch(query) {
+		this.currentFilter = (query ?? '').trim();
+		this.resetPagination();
+	}
 
-        card.addEventListener('click', () => {
-            this.handleServiceClick(service);
-        });
+	_normalizeResponse(resp, batchLength) {
+		const nextPageId = resp?.next_page_id ?? resp?.nextPageId ?? null;
+		let hasMore;
+		if (typeof resp?.hasMore === 'boolean') hasMore = resp.hasMore;
+		else if (typeof resp?.has_more === 'boolean') hasMore = resp.has_more;
+		else if (nextPageId != null) hasMore = true;
+		else hasMore = batchLength === this.itemsPerPage;
 
-        return card;
-    }
+		const total = resp?.total ?? resp?.total_count ?? resp?.count ?? undefined;
+		return { nextPageId, hasMore, total };
+	}
 
-    handleServiceClick(service) {
-        // Handle service card click - you can implement navigation here
-        console.log('Clicked service:', service);
-        // window.location.href = `/services/${service.org}/${service.service}`;
-    }
+	async loadServices() {
+		if (this.isLoading || !this.hasMore) return;
+		this.isLoading = true;
+		this.showLoading(true);
+		const gen = ++this.requestGen;
 
-updateResultsInfo(responseOrMessage = null, errorMessage = null) {
-    if (errorMessage) {
-        this.resultsInfo.textContent = errorMessage;
-        return;
-    }
+		// remember which page we actually used
+		const pageUsed = String(this.nextPageId || "1");
+		this.lastPageUsed = pageUsed;
 
-    // If string message passed directly
-    if (typeof responseOrMessage === "string") {
-        this.resultsInfo.textContent = responseOrMessage;
-        return;
-    }
+		try {
+			const payload = {
+				page_id: pageUsed,
+				num_results: String(this.itemsPerPage),
+				filter: this.currentFilter,
+				username: ""
+			};
+			const response = await apiPost('list_services', payload);
+			if (gen !== this.requestGen) return; // stale response
 
-    // If response object
-    if (responseOrMessage && typeof responseOrMessage === "object") {
-        const filterText = this.currentFilter ? ` matching "${this.currentFilter}"` : '';
-        this.resultsInfo.textContent =
-            `Showing ${this.services.length} of ${responseOrMessage.total} services${filterText}`;
-        return;
-    }
+			const batch = Array.isArray(response?.services) ? response.services : [];
+			this.renderServices(batch);
+			this.services.push(...batch);
 
-    // Default when no services
-    if (this.services.length === 0 && !this.isLoading) {
-        this.resultsInfo.textContent = "No services found";
-    }
+			const norm = this._normalizeResponse(response, batch.length);
+
+			// Decide next page ID (monotonic, no-spin)
+			let newNext = null;
+			if (norm.nextPageId != null) {
+				newNext = String(norm.nextPageId);
+			} else {
+				const n = Number(pageUsed);
+				newNext = Number.isFinite(n) ? String(n + 1) : null;
+			}
+
+			// If server didn't advance page and we got nothing, stop.
+			if (newNext === pageUsed && batch.length === 0) {
+				this.hasMore = false;
+			} else {
+				this.nextPageId = newNext ?? pageUsed; // fallback to used page if parsing failed
+				this.hasMore = !!norm.hasMore && batch.length >= 0; // norm.hasMore already accounts for per_page
+			}
+
+			this.updateResultsInfo({ total: norm.total });
+			this.showNoResults(this.services.length === 0);
+
+		} catch (err) {
+			console.error('Failed to load services:', err);
+			this.updateResultsInfo(null, 'Error loading services');
+		} finally {
+			this.isLoading = false;
+			this.showLoading(false);
+
+			// If viewport still not filled and there's more, schedule another (coalesced).
+			if (this.hasMore) this.scheduleLoad();
+		}
+	}
+
+	renderServices(batch) {
+		for (const service of batch) {
+			this.servicesGrid.insertBefore(this.createServiceCard(service), this.sentinel);
+		}
+		// keep sentinel last (no-op if already last)
+		this.servicesGrid.appendChild(this.sentinel);
+	}
+
+	createServiceCard(service) {
+		const card = document.createElement('div');
+		card.className = 'service-card';
+		console.log(service);
+		const service_name = service.service_name.replace("_", ".");
+		const org = service_name.split(".")[0];
+		const name = service_name.split(".")[1];
+		card.innerHTML = `
+			<div class="service-name">
+				<dark>${org}</dark>.${name}
+			</div>`;
+		card.addEventListener('click', () => this.handleServiceClick(service_name));
+		return card;
+	}
+
+	handleServiceClick(service) {
+	console.log("fkfk");
+		window.location.href = BACKEND_URL + "/service/"+service;
+	}
+
+	updateResultsInfo(resp = null, errorMessage = null) {
+		if (!this.resultsInfo) return;
+		if (errorMessage) {
+			this.resultsInfo.textContent = errorMessage;
+			return;
+		}
+		const total = resp?.total;
+		const filterText = this.currentFilter ? ` matching "${this.currentFilter}"` : '';
+		if (typeof total === 'number') {
+			this.resultsInfo.textContent = `Showing ${this.services.length} of ${total} services${filterText}`;
+		} else {
+			this.resultsInfo.textContent = `Showing ${this.services.length} services${filterText}`;
+		}
+	}
+
+	showLoading(show) {
+		if (this.loadingIndicator) this.loadingIndicator.style.display = show ? 'flex' : 'none';
+	}
+	showNoResults(show) {
+		if (this.noResults) this.noResults.style.display = show ? 'block' : 'none';
+	}
 }
 
-    showLoading(show) {
-        this.loadingIndicator.style.display = show ? 'flex' : 'none';
-    }
-
-    showNoResults(show) {
-        this.noResults.style.display = show ? 'block' : 'none';
-    }
-}
-
-// Initialize the service list when the page loads
 document.addEventListener('DOMContentLoaded', () => {
-    new ServiceList();
+	new ServiceList();
 });

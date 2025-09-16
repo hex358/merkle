@@ -87,7 +87,8 @@ class MerkleService:
 			map = services
 			map[subenv_name.encode()] = db_boosts.serialize(meta)
 			map.flush_buffer()
-		env = open_environment(subenv_name, 1024, False, 2*22)
+		env = open_environment(subenv_name, 1, False, 2*22)
+		self.pending: int = 0
 		self.env = env
 
 		# general list of hashes
@@ -117,6 +118,7 @@ class MerkleService:
 	INTERNAL_PREFIX = b"nlvl"
 
 	def flush(self):
+		self.env.set_mapsize(self.env.info()["map_size"] + self.pending * 1024)
 		for i in self.to_flush:
 			i.flush_buffer()
 		self.node_hashes.flush_buffer()
@@ -174,6 +176,7 @@ class MerkleService:
 	def add(self, h: bytes) -> None:
 		# hash and append to node_hashes
 		#h: bytes = kief(blob)
+		self.pending += 1
 		idx = len(self.node_hashes)
 		self.node_hashes.append(h)
 
@@ -320,21 +323,23 @@ def client_check(bundle: Dict[str, Any]) -> bool:
 
 import shutil
 import os
-
-def delete_service(name: str) -> bool:
+def delete_service(name: str, from_cache: dict) -> bool:
     key = name.encode()
     if key not in services:
         return False
 
     try:
+        if name in from_cache:
+            from_cache[name].flush()
+            from_cache[name].env.close()
         del services[key]
         services.flush_buffer()
-    except Exception:
-        pass
+    except Exception as e:
+        print(e)
 
-    env_path = f".db/{name}"
+    env_path = f".hexdb/{name}"
     try:
-        shutil.rmtree(env_path, ignore_errors=True)
+        shutil.rmtree(env_path)
     except Exception as e:
         print(f"Failed to delete env folder {env_path}: {e}")
 

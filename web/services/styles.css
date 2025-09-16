@@ -362,3 +362,5 @@ body {
 .btnflat-secondary:hover {
     background: #444;
 }
+
+#servicesGrid { overflow-anchor: none; }

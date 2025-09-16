@@ -100,12 +100,8 @@ class Services:
     @classmethod
     def check_token(cls, name: str, token: str) -> bool:
         try:
-            print("try...")
-            for i in hashed_tokens.iterate():
-                print(i)
             return verify_password(token, hashed_tokens[name.encode()].decode())
         except Exception as e:
-            print("\n".join(traceback.format_exception(e)))
             return False
 
     @classmethod
@@ -138,6 +134,7 @@ class Services:
         # flush
         stored_user_services.flush_buffer()
         stored_tokens.flush_buffer()
+        hashed_tokens.flush_buffer()
 
         fuzzysearch.register_result(pathname)
 
@@ -146,7 +143,10 @@ class Services:
 
     @classmethod
     def gettoken(cls, who: str, user: str, key: str):
-        return decrypt_token(stored_tokens[(user+"."+who).encode()], key)
+        try:
+            return decrypt_token(stored_tokens[(user+"."+who).encode()], key)
+        except:
+            return ""
 
     @classmethod
     def update(cls, who: str, username: str, password: str, metadata: dict) -> bool:
@@ -159,13 +159,16 @@ class Services:
 
     @classmethod
     def get_metadata(cls, name: str) -> dict:
-        stored = mmr.get_meta(name.encode())
-        if stored is None:
-            raise NameError(f"Service {name} doesn't exist")
-        new_stored = {}
-        for k,v in stored.items():
-            new_stored[k.decode()] = v.decode()
-        return new_stored
+        try:
+            stored = mmr.get_meta(name.encode())
+            if stored is None:
+                raise NameError(f"Service {name} doesn't exist")
+            new_stored = {}
+            for k,v in stored.items():
+                new_stored[k.decode()] = v.decode()
+            return new_stored
+        except:
+            return {}
 
     @classmethod
     def service_exists(cls, name: str) -> bool:
@@ -175,7 +178,6 @@ class Services:
     def my_service_list(cls, user: str) -> bool:
         res = []
         if not user.encode() in stored_user_services: return []
-        print(stored_user_services[user.encode()])
         for i in stored_user_services[user.encode()].split(b":"):
             if not i: continue
             res.append({"service_name": i.decode(), "metadata": cls.get_metadata((user.encode() + b"." + i).decode())})
@@ -187,7 +189,10 @@ def get_service_obj(name: str):
     return cached_services[name]
 
 def validate_password(username: str, password: str):
-    return verify_password(password, stored_user_passwords[username.encode()].decode())
+    try:
+        return verify_password(password, stored_user_passwords[username.encode()].decode())
+    except:
+        return False
 
 @app.post("/register_service")
 @contract({"service_name": (0, str), "password": (0, str), "username": (0, str)})
@@ -219,7 +224,7 @@ async def delete_service(request):
         return sanic_json({"status": "ERR", "message": "Service doesn't exist"})
 
     try:
-        mmr.delete_service(pathname)
+        mmr.delete_service(pathname, cached_services)
     except Exception:
         pass
 
@@ -268,7 +273,8 @@ async def update_service(request):
                                                          request.json["password"],
                                                          request.json["metadata"]) else "ERR"})
 
-cached_search_results = {}
+import cachetools
+cached_search_results = cachetools.TTLCache(2**12, 60*5)
 
 
 def clear_user_cache(username: str):
@@ -279,7 +285,7 @@ def clear_user_cache(username: str):
 
 fuzzysearch.ensure_collection()
 @app.post("/list_services")
-@contract({"filter": (0, str), "page_id": (0, int), "num_results": (0, int), "username": (0, str)})
+@contract({"filter": (0, str), "page_id": (0, str), "num_results": (0, str), "username": (0, str)})
 async def list_services(request):
     username = request.json["username"]
     filter_text = request.json["filter"]
@@ -293,12 +299,12 @@ async def list_services(request):
         # fuzzy search with per-user cache
         global cached_search_results
         if cache_key not in cached_search_results:
-            results = fuzzysearch.find_results(filter_text) or []
+            results = fuzzysearch.search_all_parallel(filter_text, 3, 250, 4) or []
             cached_search_results[cache_key] = results
         all_results = cached_search_results[cache_key]
 
         # slice the cached results
-        start = page_id * num_results
+        start = (page_id-1) * num_results
         end = start + num_results
         page_docs = all_results[start:end]
         total = len(all_results)
@@ -308,12 +314,11 @@ async def list_services(request):
         # only consume exactly one page worth to keep it to ONE network call
         page_docs = []
         total = fuzzysearch.total()
-        gen = fuzzysearch.iterate_all(from_page=page_id + 1, per_page=num_results)
+        gen = fuzzysearch.iterate_all(from_page=page_id, per_page=num_results)
         for i, doc in enumerate(gen):
             page_docs.append(doc)
             if i + 1 >= num_results:
                 break
-
     services = []
     for d in page_docs:
         try:
@@ -321,7 +326,7 @@ async def list_services(request):
         except Exception:
             continue
 
-    return sanic_json({"status": "OK", "services": services, "total": total})
+    return sanic_json({"status": "OK", "services": services, "total": total, "has_more": len(services) < total, "next_page_id": page_id+1})
 
 
 
@@ -345,8 +350,10 @@ async def add_blob(request):
 @app.post("/get_token")
 @contract({"service_name": (0, str), "username": (0, str), "password": (0, str)})
 async def get_token(request):
-    return sanic_json({"status": "OK", "token": Services.gettoken(request.json["service_name"], request.json["username"],
-                                                                  request.json["password"]), "message": ""})
+    tok = Services.gettoken(request.json["service_name"], request.json["username"], request.json["password"])
+    if not tok:
+        return sanic_json({"status": "ERR", "token": "", "message": ""})
+    return sanic_json({"status": "OK", "token": tok, "message": ""})
 
 @app.post("/user_login")
 @contract({"username": (0, str), "password": (0, str)})
