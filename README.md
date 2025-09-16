@@ -254,9 +254,10 @@ POST /has_service
 
 ## 📊 Roadmap
 
-* Add more client SDKs (Rust, Go)
+* Add more client SDKs (Node.js, Python)
+* WebRTC support for even faster verification
 * Visualization dashboard for root hashes & proofs
-* Advanced fraud detection workflows (highlighting “fake” mismatches)
+* Advanced fraud detection workflows (highlighting "fake" mismatches)
 * Integration plugins for email, payment, and notification systems
 
 ---
