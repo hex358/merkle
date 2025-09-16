@@ -55,7 +55,7 @@
             <div class="offering-card">
                 <h3 class="offering-title">3rd-party hash audit</h3>
                 <p class="offering-description">
-                    Root hashes are published every few minutes, enabling anyone to independently audit the system. Any change will be recorded.
+                    Root hashes are open to anyone, enabling to independently audit the system. Any change will be recorded.
                 </p>
                 <img class="offering-icon" src="images/eye.svg" alt="">
             </div>
@@ -75,11 +75,47 @@
 
         <!-- Services Section -->
         <section class="services-section" id="services">
-            <div class="container">
-                <h2 class="section-title">Test.. write here..</h2>
-                <p>ff</p>
-            </div>
-        </section>
+  <div class="container">
+    <h2 class="section-title">How CertumTree Works</h2>
+    <p class="service-description">
+      CertumTree is a <b>zero-trust data verification layer</b> designed to prevent tampering and fraud.
+      When a digital object - such as a message, file, or transaction - is registered through the API,
+      it is reduced to a cryptographic hash. The system never stores the raw content,
+      only these hashes, which act as irreversible digital fingerprints.
+    </p><br>
+    <p class="service-description">
+      All hashes are organized into an <b>append-only Merkle Mountain Range</b>,
+      ensuring that once a record is added, it cannot be modified or deleted.
+      Each new insertion extends the chain of proofs while preserving the full history of prior states.
+    </p><br>
+    <p class="service-description">
+      To guarantee transparency, <b>root hashes</b> - the condensed representation of the entire dataset -
+      are publicly available. This allows independent auditors or third parties to confirm
+      that no hidden modifications occurred between checkpoints.
+    </p><br>
+    <p class="service-description">
+      Under the hood, CertumTree is powered by a custom high-performance key-value engine,
+      derived from LMDB - <b>HexDB</b>. HexDB is optimized for millions of inserts per second,
+      enabling CertumTree to handle large-scale verification workloads without sacrificing speed or consistency.
+    </p><br>
+    <p class="service-description">
+      The result is a system where authenticity can be proven <b>both ways</b>:
+      services can issue cryptographic proofs of integrity, and clients can
+      independently validate them without relying on trust in a central authority.
+    </p><br>
+      <p class="service-description">
+  The <b>CertumTree API</b> makes integration straightforward. Applications can register new records,
+  request inclusion proofs, and verify data integrity with just a few endpoints.
+  Designed to be lightweight and stateless, the API can be embedded into existing systems with minimal effort,
+  enabling real-time verification for messages, documents, financial transactions, or any other digital objects.
+</p><br>
+      <p class="service-description">
+  The project is fully <b>open source</b> under the permissive <b>MIT license</b>,
+  encouraging community contributions, transparency, and independent adoption.
+  Many new features and improvements (such as WebRTC support for even faster verifications) will continue to be added as the ecosystem grows.
+</p>
+  </div>
+</section>
     </main>
 
     <!-- Footer -->
