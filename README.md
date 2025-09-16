@@ -1,5 +1,7 @@
 # 🌲CertumTree
 
+![](./previews/mainpage.png)
+
 **CertumTree** is a zero-trust data verification system designed to protect digital information from forgery and manipulation.  
 It provides a lightweight, cryptographically secure way to register and verify any digital object (messages, files, documents, API events) with proofs that can be checked independently - even outside the server.
 
@@ -53,7 +55,7 @@ It provides a lightweight, cryptographically secure way to register and verify a
 - **Cryptographic Core:** Merkle Mountain Range (MMR) for append-only proofs  
 - **Database Engine:**  
   - CertumTree uses **HexDB** (custom LMDB-based key-value store optimized for constant-length hashes)  
-  - Benchmarked at **100M inserts/sec** on Intel i7 (Windows)  
+  - Benchmarked at **180M inserts/sec** on Intel i7 (Windows)  
 - **APIs & Clients:**  
   - REST API built with Sanic
 
@@ -89,38 +91,35 @@ The frontend is served directly by the Sanic application and integrates tightly 
   Businesses integrate CertumTree to guarantee that content sent to users is authentic and untampered.  
 
 - **User-Controlled Verification**  
-  End-users can register and verify their own data blobs (e.g., legal documents, contracts, personal records).  
+  End-users can register and verify their own data blobs (e.g., legal documents, contracts, personal records).
 
+- **Personal Correspondence Protection**  
+  Two people can register a blob of their messages in CertumTree, ensuring that no one can alter or falsify the conversation later. No false accusations!
 
 
 ---
 
-## 🚀 Getting Started
+## 🛠 Frameworks & Stack
 
-### 1. Run the Server
+* **Sanic** - Async Python web framework
+* **cryptography** - AES-GCM and PBKDF2 for password/token security
+* **cachetools** - TTL-based in-memory cache for search results
+* **LMDB (via HexDB interface)** - High-performance embedded database
+* **Merkle Mountain Range (custom `mmr` module)** - Core data structure for append-only proofs
+* **FuzzySearch module** - Parallelized fuzzy search for service discovery
+* **Typesense** - Full-text search engine integration for services
+* **Pathlib & custom router** - Static asset routing and HTML template serving
+* **uuid & secrets** - Token generation and secure randomness
 
 
-### 2. API Endpoints
+---
 
-#### User Signup
+## 🚀 Usage
+![](./previews/dashboard.png)
+![](./previews/search.png)
 
-```http
-POST /user_signup
-{
-  "username": "alice",
-  "password": "secret"
-}
-````
-
-#### User Login
-
-```http
-POST /user_login
-{
-  "username": "alice",
-  "password": "secret"
-}
-```
+Firstly, *signup* and add a service on your *Dashboard*.<br>
+Then use these endpoints through any HTTP client:
 
 #### Register Service
 
@@ -238,23 +237,10 @@ POST /has_service
 
 ---
 
-## 🛠 Frameworks & Stack
-
-* **Sanic** - Async Python web framework
-* **cryptography** - AES-GCM and PBKDF2 for password/token security
-* **cachetools** - TTL-based in-memory cache for search results
-* **LMDB (via HexDB interface)** - High-performance embedded database
-* **Merkle Mountain Range (custom `mmr` module)** - Core data structure for append-only proofs
-* **FuzzySearch module** - Parallelized fuzzy search for service discovery
-* **Typesense** - Full-text search engine integration for services
-* **Pathlib & custom router** - Static asset routing and HTML template serving
-* **uuid & secrets** - Token generation and secure randomness
-
----
-
 ## 📊 Roadmap
 
-* Add more client SDKs (Node.js, Python)
+* Add more client SDKs (Node.js, Go)
+* Make HexDB a fully separate module
 * WebRTC support for even faster verification
 * Visualization dashboard for root hashes & proofs
 * Advanced fraud detection workflows (highlighting "fake" mismatches)
@@ -273,7 +259,3 @@ MIT License © 2025 CertumTree Project
 Our goal with CertumTree is to make **trustless verification of digital data** accessible for everyone - from small businesses to individuals.
 By removing reliance on central authorities, we protect users from forgery, phishing, and digital fraud in a way that is simple, open, and cryptographically guaranteed.
 
-```
-
-Do you want me to also expand **Frontend** with a visual description (like a short flow of how signup → dashboard → add blob looks), or keep it just technical?
-```
