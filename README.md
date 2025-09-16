@@ -116,7 +116,6 @@ The frontend is served directly by the Sanic application and integrates tightly 
 
 ## 🚀 Usage
 ![](./previews/dashboard.png)
-![](./previews/search.png)
 
 Firstly, *signup* and add a service on your *Dashboard*.<br>
 Then use these endpoints through any HTTP client:
