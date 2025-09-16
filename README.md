@@ -1,6 +1,4 @@
-Here’s the updated file with frontend description added (based on your API and imported modules). I kept the structure intact and minimized changes:
-
-# CertumTree
+# 🌲CertumTree
 
 **CertumTree** is a zero-trust data verification system designed to protect digital information from forgery and manipulation.  
 It provides a lightweight, cryptographically secure way to register and verify any digital object (messages, files, documents, API events) with proofs that can be checked independently - even outside the server.
