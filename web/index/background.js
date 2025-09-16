@@ -6,6 +6,7 @@ const ctx = canvas.getContext("2d");
 
 let width, height;
 let animationId = null;
+let isAnimating = false;
 
 function resize() {
 	width = canvas.width = canvas.offsetWidth;
@@ -31,6 +32,8 @@ for (let i = 0; i < numParticles; i++) {
 const maxDist2 = 150 * 150;
 
 function animate() {
+	if (!isAnimating) return; // stop drawing when paused
+
 	ctx.clearRect(0, 0, width, height);
 	ctx.save();
 	ctx.translate(width / 2, height / 2);
@@ -47,7 +50,6 @@ function animate() {
 			const dist2 = dx * dx + dy * dy;
 
 			if (dist2 < maxDist2) {
-				// sqrt only when needed
 				const dist = Math.sqrt(dist2);
 				const alpha = Math.min(1.0, (1 - dist / 150) * 1.5);
 
@@ -67,7 +69,6 @@ function animate() {
 		p.x += p.vx;
 		p.y += p.vy;
 
-		// Wrap around
 		if (p.x < 0) p.x = width;
 		else if (p.x > width) p.x = 0;
 		if (p.y < 0) p.y = height;
@@ -81,13 +82,39 @@ function animate() {
 	ctx.restore();
 	animationId = requestAnimationFrame(animate);
 }
-animate();
 
-// Cleanup
-window.backgroundAnimationCleanup = function () {
+// Start animation
+function startAnimation() {
+	if (!isAnimating) {
+		isAnimating = true;
+		animate();
+	}
+}
+
+// Stop animation
+function stopAnimation() {
+	isAnimating = false;
 	if (animationId) {
 		cancelAnimationFrame(animationId);
 		animationId = null;
 	}
+}
+
+// Auto toggle based on scroll
+window.addEventListener("scroll", () => {
+	if (window.scrollY > 500) {
+		stopAnimation();
+	} else {
+		startAnimation();
+	}
+});
+
+// Start initially
+startAnimation();
+
+// Cleanup
+window.backgroundAnimationCleanup = function () {
+	stopAnimation();
 	window.removeEventListener("resize", resizeHandler);
+	window.removeEventListener("scroll", scrollHandler);
 };

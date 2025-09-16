@@ -262,7 +262,7 @@ const VerificationManager = {
         }
 
         resultsSection.style.display = "block";
-       // resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+       resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
     },
 
     hideResults: function() {
