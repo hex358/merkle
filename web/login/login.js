@@ -33,15 +33,9 @@ document.addEventListener("DOMContentLoaded", () => {
             return showError("Invalid characters used. Only letters, numbers, underscore are allowed.");
         }
 
-        // (4) Username length > 10
-        if (username.length > 10) return showError("Username must not exceed 10 characters.");
-
-        // (5) Password length > 10
-        if (password.length > 10) return showError("Password must not exceed 10 characters.");
-
         try {
             const res = await apiPost("/user_login", { username, password });
-
+            console.log(res);
             if (res.status === "OK") {
                 saveCredentials(username, password);
                 window.location.href = "/";

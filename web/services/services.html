@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CertumTree - Service Directory</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="services/styles.css">
+</head>
+<body>
+    <!-- Header -->
+  <header class="header">
+    <nav class="nav-container">
+      <div class="nav-brand">CertumTree</div>
+            <script src="common/right_header.js"></script>
+            <div class="rightHeader"></div>
+    </nav>
+  </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Page Header -->
+        <div class="page-header">
+            <h1 class="page-title">Service Directory</h1>
+            <p class="page-description">Search through cryptographically secured service registrations.
+            </p>
+        </div>
+
+        <!-- Search Section -->
+        <section class="search-section">
+            <div class="search-container">
+                <input
+                    type="text"
+                    class="search-input"
+                    id="searchInput"
+                    placeholder="Search services..."
+                    autocomplete="off"
+                >
+                <div class="search-icon">🔍</div>
+            </div>
+        </section>
+
+        <!-- Results Info -->
+        <div class="results-info" id="resultsInfo">
+            Loading services...
+        </div>
+
+        <!-- Services Section -->
+        <section class="services-section">
+            <div class="services-grid" id="servicesGrid">
+                <!-- Service cards will be populated here -->
+            </div>
+
+            <!-- Loading indicator -->
+            <div class="loading-container" id="loadingIndicator" style="display: none;">
+                <div class="loading-spinner"></div>
+            </div>
+
+            <!-- No results message -->
+            <div class="no-results" id="noResults" style="display: none;">
+                <h3>No services found</h3>
+                <p>Try adjusting your search terms or check back later for new services.</p>
+            </div>
+        </section>
+    </main>
+
+    <script src="common/utils.js"></script>
+    <script src="services/catalogue.js"></script>
+</body>
+</html>

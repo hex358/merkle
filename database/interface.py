@@ -185,7 +185,7 @@ def decode_val(data: bytes):
             return StoredReference.from_reference(payloads[0], decoded)
         case _:
             # ??
-            raise ValueError(f"unknown typecode: {chr(code)}")
+            return data
 
 
 class StoredObject:
@@ -597,7 +597,7 @@ class StoredList(StoredObject):
 
             self.get_results = cursor.getmulti(self._batched_writes.keys())
 
-            cursor.putmulti(items=call_sets(), reserve=0)
+            cursor.putmulti(items=call_sets(), reserve=1)
 
         if self.do_batch_writes:
             self.write_stat(key=b"length", value=str(total).encode("ascii"))

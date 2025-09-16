@@ -6,8 +6,8 @@ from database.interface import (
 	StoredDict, StoredList, StoredReference, BatchingConfig,
 	encode_val, decode_val, Start, open_environment
 )
-
-Start(1024, False, 30000)
+if __name__ == "mmr":
+	Start(4096, False, 10_000_000)
 
 
 def _lvl_key(level: int) -> bytes:
@@ -63,28 +63,28 @@ def kief(*args: Any) -> bytes:
 
 def get_meta(name: bytes):
 	try:
-		return db_boosts.deserialize(StoredDict(name=b"__services")[name])
+		return db_boosts.deserialize(services[name])
 	except Exception as e:
 		return None
 
 def has_service(name: str):
-	return name.encode() in StoredDict(name=b"__services")
+	return name.encode() in services
 
 import db_boosts
 def set_service(name: str, meta: dict) -> bool:
 	if has_service(name):
-		map = StoredDict(name=b"__services")
+		map = services
 		map[name.encode()] = db_boosts.serialize(meta)
 		map.flush_buffer()
 		return True
 	else:
 		return False
 
-
+services = StoredDict(name=b"__services", cache_on_set=True)
 class MerkleService:
 	def __init__(self, subenv_name: str, meta: dict = {}):
 		if not has_service(subenv_name):
-			map = StoredDict(name=b"__services")
+			map = services
 			map[subenv_name.encode()] = db_boosts.serialize(meta)
 			map.flush_buffer()
 		env = open_environment(subenv_name, 1024, False, 2*22)
@@ -242,7 +242,8 @@ class MerkleService:
 	def server_check(self, target_h: bytes) -> Dict[str, Any]:
 		raw_idx = _dict_get_optional(self.node_hash_indexes, target_h)
 		if raw_idx is None:
-			return {"status": 0, "detail": "Blob not found"}
+			return {"status": 0, "detail": "Blob not found",
+			        "global_root": self.get_global_root().hex()}
 		node_index: int = decode_val(raw_idx)
 
 		# locate the covering peak
@@ -285,7 +286,7 @@ class MerkleService:
 			"proof": proof,
 			"left_roots": left_roots,
 			"right_roots": right_roots,
-			"global_root": self.get_global_root().hex(),
+			"global_root": self.get_global_root().hex()
 		}
 
 
@@ -317,15 +318,24 @@ def client_check(bundle: Dict[str, Any]) -> bool:
 
     return h == expected
 
-# # ---------- quick bench ----------
-from time import perf_counter
+import shutil
+import os
 
-# if __name__ == "__main__":
-# 	# t = perf_counter()
-# 	svc = MerkleService("miuff")
-# 	for i in range(5000):
-# 		svc.add(kief(str(i).encode("ascii")))
-# 	svc.flush()
-# 	t = perf_counter()
-# 	print(client_check(svc.server_check(kief(str(435).encode("ascii")))))
-# 	print(perf_counter() - t)
+def delete_service(name: str) -> bool:
+    key = name.encode()
+    if key not in services:
+        return False
+
+    try:
+        del services[key]
+        services.flush_buffer()
+    except Exception:
+        pass
+
+    env_path = f".db/{name}"
+    try:
+        shutil.rmtree(env_path, ignore_errors=True)
+    except Exception as e:
+        print(f"Failed to delete env folder {env_path}: {e}")
+
+    return True

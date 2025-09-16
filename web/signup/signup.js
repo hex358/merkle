@@ -34,21 +34,22 @@ document.addEventListener("DOMContentLoaded", () => {
             return showError("Only letters, numbers, and '-' are allowed.");
         }
 
-        // (4) Username length > 10
-        if (username.length > 10) return showError("Username must not exceed 10 characters.");
+        if (username.length > 12) return showError("Username must not exceed 12 characters.");
 
-        // (5) Password length > 10
-        if (password.length > 10) return showError("Password must not exceed 10 characters.");
+        if (password.length < 6) return showError("Password must be at least 6 characters long.");
 
         // (6) Confirm password check
         if (password !== confirm) return showError("Passwords do not match.");
 
         try {
             const res = await apiPost("/user_signup", { username, password });
+            console.log(res);
+
 
             if (res.status === "OK") {
                 saveCredentials(username, password);
-                window.location.href = "/";
+                setTimeout(()=>{window.location.assign("/");}, 200);
+
             } else if (res.status === "ERR") {
                 return showError("Username is already taken.");
             } else {

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Service Verification - CertumTree</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+     <link rel="stylesheet" href="/service_page/service_style.css">
+</head>
+<body>
+    <!-- Top Navigation -->
+  <header class="header">
+    <nav class="nav-container">
+      <div class="nav-brand">CertumTree</div>
+            <div class="rightHeader"></div>
+            <script src="/common/right_header.js"></script>
+    </nav>
+  </header>
+
+    <main class="main-content">
+
+
+
+
+            <!-- Root Hash Display -->
+<div class="service-header">
+    <div class="service-name" id="serviceName">user.service</div>
+    <div class="root-hash-inline" id="rootHash">hhihihihhi</div>
+    <div class="service-description" id="serviceDescription">
+        Tatata...
+    </div>
+</div>
+            <!-- Service Descriptions -->
+<div class="service-descriptions" id="serviceDescriptions"></div>
+
+            <!-- Verification Section -->
+            <div class="verification-section">
+                <h2 class="section-title">Verify Data Integrity</h2>
+
+                <!-- Data Type Selector -->
+                <div class="data-type-selector">
+                    <button class="data-type-btn active" data-type="text">Text Data</button>
+                    <button class="data-type-btn" data-type="file">File Upload</button>
+                </div>
+
+                <!-- Input Section -->
+                <div class="input-section">
+                    <!-- Text Input -->
+                    <textarea
+                        class="text-input"
+                        id="textInput"
+                        placeholder="Enter your text data here for verification..."
+                    ></textarea>
+
+                    <!-- File Drop Zone -->
+                    <div class="file-drop-zone hidden" id="fileDropZone">
+                        <div class="drop-icon">📁</div>
+                        <div class="drop-text">Drop your file here or click to browse</div>
+                        <div class="drop-subtext">Supports all file types up to 10MB</div>
+                        <input type="file" id="fileInput" style="display: none;">
+                    </div>
+
+                    <!-- File Info -->
+                    <div class="file-info" id="fileInfo">
+                        <div class="file-name" id="fileName"></div>
+                        <div class="file-size" id="fileSize"></div>
+                    </div>
+                </div>
+
+                <!-- Verify Button -->
+                <button class="verify-btn" id="verifyBtn">Verify Data</button>
+
+                <!-- Processing Indicator -->
+                <div class="processing-indicator" id="processingIndicator">
+                    <div class="processing-text">Processing verification...</div>
+                    <div class="loading-spinner"></div>
+                </div>
+
+                <!-- Results Section -->
+                <div class="results-section" id="resultsSection">
+                    <div class="verification-result">
+                        <div class="result-status" id="resultStatus">✓ Data Verified</div>
+                        <div class="result-summary" id="resultSummary">
+                            Your data has been successfully verified in the blockchain records.
+                        </div>
+                    </div>
+
+                    <!-- Proof Display -->
+  <div class="proof-section">
+    <div class="proof-label">Cryptographic Proof:</div>
+    <div class="proof-display" id="proofDisplay"></div><br>
+    &nbsp;<button class="download-btn" id="downloadProofBtn" style="display:none;">
+      Download
+    </button>
+  </div>
+</div>
+
+                </div>
+            </div>
+        </div>
+    </main>
+ <script src="/blake2/blakejavascript.js"></script>
+ <script src="/common/utils.js"></script>
+     <script src="/service_page/hashtools.js"></script>
+ <script type="module" src="/service_page/scripts.js"></script>
+</body>
+</html>

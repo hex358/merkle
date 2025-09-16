@@ -1,4 +1,3 @@
-
 // ================== STATE ==================
 let services = {}; // local cache synced with backend
 let currentService = null;
@@ -9,13 +8,21 @@ let tokenVisible = false;
 async function init() {
     await loadServicesFromBackend();
     renderServiceList();
-    updateMainContent();
+
+    // restore last active service if possible
+    const savedService = localStorage.getItem("activeService");
+    if (savedService && services[savedService]) {
+        await selectService(savedService, { skipSave: true });
+    } else {
+        updateMainContent();
+    }
 }
 
 // ================== LOAD FROM BACKEND ==================
 async function loadServicesFromBackend() {
     try {
-        const response = await apiGet("/list_services", {});
+        console.log({"username": getCredentials().username});
+        const response = await apiPost("/get_my_services", {"username": getCredentials().username});
         if (response.status === "OK") {
             response.services.forEach(svc => {
                 services[svc.service_name] = {
@@ -45,12 +52,17 @@ function renderServiceList() {
     });
 }
 
-async function selectService(serviceName) {
+async function selectService(serviceName, opts = {}) {
     currentService = serviceName;
     tokenVisible = false;
 
+    // store in localStorage unless explicitly skipped
+    if (!opts.skipSave) {
+        localStorage.setItem("activeService", serviceName);
+    }
+
     // fetch metadata from backend
-    const response = await apiGet("/get_service_metadata", { service_name: serviceName });
+    const response = await apiPost("/get_service_metadata", { service_name: getCredentials().username + "." + serviceName });
     if (response.status === "OK") {
         services[serviceName].metadata = response.metadata;
     }
@@ -70,6 +82,7 @@ function updateMainContent() {
     const emptyState = document.getElementById('emptyState');
     const serviceDetails = document.getElementById('serviceDetails');
     const tokenDisplay = document.getElementById('tokenDisplay');
+    document.getElementById('show-tok').textContent = "Show Token";
 
     if (Object.keys(services).length === 0) {
         emptyState.style.display = 'block';
@@ -79,7 +92,7 @@ function updateMainContent() {
         serviceDetails.classList.add('active');
 
         document.getElementById('serviceTitle').textContent = currentService;
-        document.getElementById('serviceSubtitle').innerHTML = `Manage <i>${currentService}</i> API configuration`;
+        document.getElementById('serviceSubtitle').innerHTML = `Manage API configuration`;
 
         tokenDisplay.textContent = services[currentService].token;
         tokenDisplay.classList.toggle('visible', tokenVisible);
@@ -102,37 +115,51 @@ async function createService() {
 
     const serviceName = document.getElementById('newServiceName').value.trim();
     const errorDiv = document.getElementById('serviceNameError');
+    errorDiv.style.display = 'none';
+    errorDiv.textContent = '';
+
     if (!serviceName) return;
 
-    const response = await apiPost("/register_service", {
-        service_name: serviceName,
-        metadata: {
-            "description": "API service for " + serviceName,
-            "environment": "development",
-            "rate_limit": "1000"
-        }
-    });
-
-    if (response.status === "ERR") {
+    // ✅ validate alphanumeric
+    if (!isAlphanumeric(serviceName)) {
+        errorDiv.textContent = "Service name must be alphanumeric (letters and numbers only).";
         errorDiv.style.display = 'block';
         return;
     }
 
+    // ✅ validate max length 12
+    if (serviceName.length > 12) {
+        errorDiv.textContent = "Service name must be at most 12 characters long.";
+        errorDiv.style.display = 'block';
+        return;
+    }
+
+    const response = await apiPost("/register_service", {
+        service_name: serviceName,
+        username: getCredentials().username,
+        password: getCredentials().password,
+    });
+
+    if (response.status === "ERR") {
+        errorDiv.textContent = "Service name already exists. Please choose a different name.";
+        errorDiv.style.display = 'block';
+        return;
+    }
+
+    // ✅ success
     services[serviceName] = {
         token: response.service_token,
-        metadata: {
-            "description": "API service for " + serviceName,
-            "environment": "development",
-            "rate_limit": "1000"
-        }
     };
 
     currentService = serviceName;
+    localStorage.setItem("activeService", serviceName);
+
     closeModal('newServiceModal');
     renderServiceList();
     updateMainContent();
     renderMetadata();
 }
+
 
 // ================== TOKEN MGMT ==================
 async function toggleToken(event) {
@@ -143,18 +170,19 @@ async function toggleToken(event) {
     if (tokenVisible && currentService) {
         const serviceAtRequest = currentService; // snapshot
         try {
-            const response = await apiPost("/get_token", { "service_name": serviceAtRequest, "password": "dummy", "username": "dummy" });
+            const response = await apiPost("/get_token", { "service_name": serviceAtRequest,
+            "password": getCredentials().password, "username": getCredentials().username });
             if (response.status === "OK" && currentService === serviceAtRequest) {
                 services[serviceAtRequest].token = response.token;
                 tokenDisplay.textContent = response.token;
             } else if (currentService !== serviceAtRequest) {
-                console.log("⚠️ Ignoring token response for stale service:", serviceAtRequest);
+                console.log("⚠Ignoring token response for stale service:", serviceAtRequest);
             } else {
-                console.error("❌ Failed to fetch token:", response.message);
+                console.error("Failed to fetch token:", response.message);
                 tokenVisible = false;
             }
         } catch (err) {
-            console.error("❌ Error fetching token:", err);
+            console.error("Error fetching token:", err);
             tokenVisible = false;
         }
     }
@@ -164,20 +192,7 @@ async function toggleToken(event) {
 }
 
 
-async function regenerateToken() {
-    if (currentService) {
-        const response = await apiPost("/update_token", {
-            username: "dummy", password: "dummy"
-        });
-        if (response.status === "OK") {
-            services[currentService].token = response.token;
-            updateMainContent();
-            if (tokenVisible) {
-                document.getElementById('tokenDisplay').textContent = services[currentService].token;
-            }
-        }
-    }
-}
+
 
 function copyToken() {
     if (currentService && tokenVisible) {
@@ -246,25 +261,53 @@ function updateMetadata() {
     });
 
     services[currentService].metadata = newMetadata;
+
+    // ✅ Show Save button when metadata is changed
+    const saveBtn = document.getElementById('saveMetadataBtn');
+    if (saveBtn) {
+        saveBtn.style.display = 'inline-block';
+        saveBtn.textContent = "Save Changes";
+        saveBtn.disabled = false;
+    }
 }
+
+
+
 
 async function saveMetadata() {
     updateMetadata();
     if (!currentService) return;
 
+    const saveBtn = document.getElementById('saveMetadataBtn');
+    if (!saveBtn) return;
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving..";
+
     const response = await apiPost("/update_service", {
-        "service_name": "currentService",
-        "username": "dummy",
-        "password": "dummy",
+        "service_name": currentService,
+        "username": getCredentials().username,
+        "password": getCredentials().password,
         "metadata": services[currentService].metadata
     });
 
     if (response.status === "OK") {
-        console.log("✅ Metadata saved");
+        saveBtn.textContent = "Saved!";
+        setTimeout(() => {
+            saveBtn.style.display = "none";  // ✅ hide after success
+            saveBtn.disabled = false;
+        }, 500);
     } else {
-        console.error("❌ Failed to update metadata:", response.message);
+        saveBtn.textContent = "Failed ;(";
+        setTimeout(() => {
+            saveBtn.textContent = "Save Changes"; // reset but keep visible
+            saveBtn.disabled = false;
+        }, 500);
     }
 }
+
+
+
 
 // ================== DELETION ==================
 function showDeleteModal() {
@@ -276,9 +319,10 @@ function showDeleteModal() {
 
 async function confirmDelete() {
     if (currentService) {
-        const response = await apiPost("/delete_service", { service_name: currentService });
+        const response = await apiPost("/delete_service", { service_name: currentService, password: getCredentials().password, username: getCredentials().username });
         if (response.status === "OK") {
             delete services[currentService];
+            localStorage.removeItem("activeService");
             currentService = null;
             closeModal('deleteModal');
             renderServiceList();
@@ -292,18 +336,9 @@ function closeModal(modalId) {
     document.getElementById(modalId).classList.remove('active');
 }
 
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        const activeModal = document.querySelector('.modal-overlay.active');
-        if (activeModal) activeModal.classList.remove('active');
-    }
-});
 
-document.querySelectorAll('.modal-overlay').forEach(overlay => {
-    overlay.addEventListener('click', function(e) {
-        if (e.target === overlay) overlay.classList.remove('active');
-    });
-});
+
+
 
 // ================== START ==================
 init();

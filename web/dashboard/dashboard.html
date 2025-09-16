@@ -11,13 +11,13 @@
 </head>
 <body>
     <!-- Header -->
-    <header class="header">
-        <div class="nav-brand">CertumTree</div>
-        <div class="header-actions">
-            <span class="user-info">developer@example.com</span>
-            <button class="btn btn-secondary">Logout</button>
-        </div>
-    </header>
+  <header class="header">
+    <nav class="nav-container">
+      <div class="nav-brand">CertumTree</div>
+            <div class="rightHeader"></div>
+            <script src="common/right_header.js"></script>
+    </nav>
+  </header>
 
     <!-- Dashboard Container -->
     <div class="dashboard-container">
@@ -25,7 +25,7 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <h2 class="sidebar-title">API Services</h2>
-                <button class="btn" onclick="showNewServiceModal()">+ New Service</button>
+                <button class="btn btn-primary" onclick="showNewServiceModal()">+ New Service</button>
             </div>
             <div class="service-list" id="serviceList">
                 <!-- Services will be populated here -->
@@ -59,8 +59,7 @@
                                 <!-- Token will be displayed here -->
                             </div>
                             <div class="action-buttons">
-                                <button class="btn" onclick="toggleToken(event)" id="show-tok">Show Token</button>
-                                <button class="btn btn-secondary" onclick="regenerateToken()">Regenerate</button>
+                                <button class="btn btn-primary" onclick="toggleToken(event)" id="show-tok">Show Token</button>
                             </div>
                         </div>
                     </div>
@@ -70,7 +69,6 @@
                 <div class="details-section">
                     <div class="details-section-header">
                         <h3 class="details-section-title">Service Metadata</h3>
-                            <button class="btn btn-small" onclick="saveMetadata()">Save Changes</button>
                     </div>
                     <div class="details-section-content">
                         <div class="metadata-grid" id="metadataGrid">
@@ -78,6 +76,7 @@
                         </div>
                         <div class="action-buttons">
                             <button class="btn btn-secondary" onclick="addMetadataField()">Add Field</button>
+                            <button class="btn btn-primary" onclick="saveMetadata()" id="saveMetadataBtn" style="display: none;">Save Changes</button>
                         </div>
                     </div>
                 </div>
@@ -106,7 +105,7 @@
             <div class="modal-content">
                 <div class="form-group">
                     <label class="form-label">Service Name</label>
-                    <input type="text" class="form-input" id="newServiceName" placeholder="my-awesome-app" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" name="">
+                    <input type="text" class="form-input" id="newServiceName" placeholder="half-life-3" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" name="">
                 </div>
                 <div id="serviceNameError" style="color: #dc3545; font-size: 0.9rem; margin-top: -15px; margin-bottom: 15px; display: none;">
                     Service name already exists. Please choose a different name.
@@ -114,7 +113,7 @@
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="closeModal('newServiceModal')">Cancel</button>
-                <button class="btn" onclick="createService()">Create Service</button>
+                <button class="btn btn-primary" onclick="createService()">Create Service</button>
             </div>
         </div>
     </div>
@@ -127,8 +126,8 @@
                 <p style="color: #dc3545;">This action cannot be undone.</p>
             </div>
             <div class="modal-content">
-                <p>Are you sure you want to delete "<span id="deleteServiceName"></span>"?</p>
-                <p style="color: #888; margin-top: 10px;">This will permanently remove the service and invalidate all associated API tokens.</p>
+                <p>Are you sure you want to delete "<span id="deleteServiceName"></span>"?<br>This will invalidate your token and mark all registered blobs fake.</p>
+
             </div>
             <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="closeModal('deleteModal')">Cancel</button>
@@ -137,7 +136,6 @@
         </div>
     </div>
 
-    <script src="common/utils.js"></script>
     <script src="common/utils.js"></script>
    <script src="dashboard/dashboard.js"></script>
 </body>

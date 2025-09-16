@@ -46,21 +46,44 @@ function delay(fn, ms) {
 
 
 
-const BACKEND_URL = "http://localhost:8000";
+const BACKEND_URL = "";
 // ================== API HELPERS ==================
-async function apiPost(path, data) {
-    const res = await fetch(`${BACKEND_URL}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data)
-    });
-    return res.json();
+
+// Unified request helper so GET/POST behave identically
+async function apiRequest(method, path, data = null, opts = {}) {
+    const isGet = method === "GET";
+    const qs = isGet && data ? `?${new URLSearchParams(data)}` : "";
+    const url = `${BACKEND_URL}${path}${qs}`;
+
+    const init = {
+        method,
+        headers: {
+            "Accept": "application/json",
+            ...(isGet ? {} : { "Content-Type": "application/json" }),
+            ...(opts.headers || {})
+        },
+        body: isGet ? undefined : JSON.stringify(data ?? {}),
+        // keep the request alive even if a navigation starts
+        keepalive: true,
+        // send/accept cookies if you're on a different origin
+        credentials: BACKEND_URL ? "include" : "same-origin",
+        cache: "no-store",
+        redirect: "follow",
+        signal: opts.signal
+    };
+
+    const res = await fetch(url, init);
+    let json = null;
+    try { json = await res.json(); } catch { json = {}; } // always consume body
+    console.log(path, data);
+    console.log(json);
+    return json;
 }
 
-async function apiGet(path, params) {
-    const res = await fetch(`${BACKEND_URL}${path}?${new URLSearchParams(params)}`);
-    return res.json();
-}
+const apiPost = (path, data, opts) => apiRequest("POST", path, data, opts);
+const apiGet  = (path, params, opts) => apiRequest("GET", path, params, opts);
+
+
 
 
 
@@ -77,16 +100,18 @@ function clearCredentials() {
 
 function getCredentials() {
     const raw = localStorage.getItem(AUTH_KEY);
+    console.log(raw);
     return raw ? JSON.parse(raw) : null;
 }
 
 async function tryAutoLogin() {
     const creds = getCredentials();
+    console.log("TRYING");
     if (!creds) return false; // nothing saved
 
     try {
         const res = await apiPost("/user_login", creds);
-        if (res.success) {
+        if (res.status === "OK") {
             console.log("Auto-login successful:", res.user);
             return res.user;
         } else {

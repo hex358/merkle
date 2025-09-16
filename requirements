@@ -4,8 +4,58 @@ pybind11
 setuptools
 patch_ng
 uvicorn
+typesense
+python-dotenv
+cachetools
+npm install blakejs
 
-# For PowerShell, for convenient running
+
+#### RUN TYPESENSE
+ docker run -p 8108:8108 -v/tmp/typesense-data:/data  typesense/typesense:0.25.1  --data-dir /data --api-key=xyz --enable-cors
+ docker run -d --name typesense -p 8108:8108 -v /tmp/typesense-data:/data typesense/typesense:0.25.1 --data-dir /data --api-key=xyz --enable-cors
+
+
+docker stop typesense   # stop it
+docker start typesense  # start it again
+## OR (win)
+git clone https://github.com/typesense/typesense.git
+cd typesense
+npm install
+mkdir -p ~/typesense-data-dir
+npm start -- --data-dir ~/typesense-data-dir
+
+
+
+#### PS (WIN) CONVINIENT RUN
 notepad $PROFILE
 function run-api { sanic api.app --dev }
 Set-Alias run run-api
+
+
+#### DOCKER LINUX RUN
+
+# Update system
+sudo apt update
+
+# Install required packages
+sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
+
+# Add Docker’s official GPG key
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
+
+# Add Docker repository
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Update again & install Docker
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io
+
+
+
+# Drop Typesense:
+docker exec -it typesense sh
+# now inside container shell
+rm -rf /data/*
+exit

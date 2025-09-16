@@ -381,7 +381,7 @@ body {
 }
 
 .service-card:hover {
-    transform: scale(1.03);
+    transform: scale(1.01);
     border-color: #00d4ff;
     box-shadow: 0 5px 15px rgba(0, 212, 255, 0.2);
 }
@@ -757,11 +757,7 @@ dark {
   transition: border-color var(--transition-fast);
 }
 
-.form-input:focus {
-  outline: none;
-  border-color: rgb(203, 203, 203);
-  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.2);
-}
+
 
 
 .card-login {
@@ -1060,4 +1056,21 @@ input:autofill {
   white-space: normal;       /* allow line breaks */
   overflow-wrap: anywhere;   /* let browser wrap at natural breakpoints */
   word-break: keep-all;      /* don't break inside words */
+}
+
+
+.form-input {
+    background: rgba(43, 43, 43, 0.8);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    color: #e0e0e0;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: inherit;
+    transition: all var(--transition-fast);
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: rgb(84, 226, 255);
+    box-shadow: 0 0 8px rgba(0, 212, 255, 0.3);
 }

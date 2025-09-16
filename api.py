@@ -1,16 +1,21 @@
 # ----------------- imports -----------------
 import os, json, base64, hashlib, secrets, traceback
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from functools import wraps
 
 from sanic import Sanic, html, text
 from sanic import json as sanic_json
 from sanic.exceptions import NotFound, InvalidUsage
 import uuid
+from sanic.response import file
+from pathlib import Path
+#from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 # project modules
 import web.app_router as router
 import database.interface as interface
 import mmr
+import fuzzysearch
 
 # ----------------- constants -----------------
 _PBKDF2_ITERS = 100_000
@@ -44,7 +49,6 @@ def contract(structure: dict):
         async def wrapper(request, *args, **kwargs):
             received = request.json or {}
             err = sanic_json({"status": "ERR", "message": f"Incorrect data format: expected {structure}"})
-            print(received)
 
             for k, spec in structure.items():
                 if k not in received: return err
@@ -60,24 +64,97 @@ def contract(structure: dict):
         return wrapper
     return decorator
 
+def derive_key(password: str, salt: bytes, length: int = 32) -> bytes:
+    """Derive symmetric key from password using PBKDF2-HMAC-SHA256."""
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERS, dklen=length)
+
+def encrypt_token(token: str, password: str) -> bytes:
+    salt = os.urandom(16)
+    key = derive_key(password, salt)
+    aesgcm = AESGCM(key)
+    nonce = os.urandom(12)
+    ct = aesgcm.encrypt(nonce, token.encode(), None)
+    # store all parts together
+    return base64.b64encode(salt + nonce + ct)
+
+def decrypt_token(enc: bytes, password: str) -> str:
+    raw = base64.b64decode(enc)
+    salt, nonce, ct = raw[:16], raw[16:28], raw[28:]
+    key = derive_key(password, salt)
+    aesgcm = AESGCM(key)
+    return aesgcm.decrypt(nonce, ct, None).decode()
+
+
+
+
 # ----------------- services -----------------
+stored_tokens = interface.StoredDict(name=b"tokens", cache_on_set=True)
+hashed_tokens = interface.StoredDict(name=b"hashed_tokens", cache_on_set=True)
 class Services:
     @classmethod
-    def try_login(cls, name: str, token: str) -> bool:
-        return True  # placeholder
-
-    @classmethod
-    def register(cls, name: str, metadata: dict) -> str:
-        if not name in cached_services:
+    def get_service(cls, name: str) -> bool:
+        if name not in cached_services:
             cached_services[name] = mmr.MerkleService(name)
-        return "1234567"
+        return cached_services[name]
 
     @classmethod
-    def update(cls, token: str, metadata: dict) -> bool:
+    def check_token(cls, name: str, token: str) -> bool:
+        try:
+            print("try...")
+            for i in hashed_tokens.iterate():
+                print(i)
+            return verify_password(token, hashed_tokens[name.encode()].decode())
+        except Exception as e:
+            print("\n".join(traceback.format_exception(e)))
+            return False
+
+    @classmethod
+    def register(cls, who: str, username: str, password: str) -> str:
+        pathname = f"{username}.{who}"
+        who_b = who.encode()
+        user_b = username.encode()
+
+        if pathname not in cached_services:
+            cached_services[pathname] = mmr.MerkleService(pathname)
+
+        try:
+            mmr.set_service(pathname, {})
+        except Exception:
+            pass
+
+        # generate & store encrypted token
+        token = str(uuid.uuid4())
+        enc_token = encrypt_token(token, password)
+        stored_tokens[pathname.encode()] = enc_token
+        hashed_tokens[pathname.encode()] = hash_password(token).encode()
+
+        # add service name ONCE to the user's list
+        current = stored_user_services[user_b]
+        items = [x for x in current.split(b":") if x]  # strip empties
+        if who_b not in items:
+            items.append(who_b)
+        stored_user_services[user_b] = b":".join(items)
+
+        # flush
+        stored_user_services.flush_buffer()
+        stored_tokens.flush_buffer()
+
+        fuzzysearch.register_result(pathname)
+
+        return token
+
+
+    @classmethod
+    def gettoken(cls, who: str, user: str, key: str):
+        return decrypt_token(stored_tokens[(user+"."+who).encode()], key)
+
+    @classmethod
+    def update(cls, who: str, username: str, password: str, metadata: dict) -> bool:
         new_meta = {}
         for k,v in metadata.items():
             new_meta[k.encode()] = v.encode()
-        mmr.set_service("gg", new_meta)
+
+        mmr.set_service(username+ "." + who, new_meta)
         return True  # placeholder
 
     @classmethod
@@ -94,84 +171,209 @@ class Services:
     def service_exists(cls, name: str) -> bool:
         return mmr.has_service(name)
 
+    @classmethod
+    def my_service_list(cls, user: str) -> bool:
+        res = []
+        if not user.encode() in stored_user_services: return []
+        print(stored_user_services[user.encode()])
+        for i in stored_user_services[user.encode()].split(b":"):
+            if not i: continue
+            res.append({"service_name": i.decode(), "metadata": cls.get_metadata((user.encode() + b"." + i).decode())})
+        return res
+
 def get_service_obj(name: str):
     if name not in cached_services:
         cached_services[name] = mmr.MerkleService(name)
     return cached_services[name]
 
-# ----------------- endpoints -----------------
+def validate_password(username: str, password: str):
+    return verify_password(password, stored_user_passwords[username.encode()].decode())
+
 @app.post("/register_service")
-@contract({"metadata": (0, dict), "service_name": (0, str)})
+@contract({"service_name": (0, str), "password": (0, str), "username": (0, str)})
 async def register_service(request):
     name = request.json["service_name"]
-    if Services.service_exists(name):
+    username = request.json["username"]
+    password = request.json["password"]
+    if Services.service_exists(username + "." + name) or ":" in name:
         return sanic_json({"status": "ERR", "message": "Service already exists"})
-    token = Services.register(name, request.json["metadata"])
+    token = Services.register(name, username, password)
+
     return sanic_json({"status": "OK", "service_token": token, "message": ""})
 
+@app.post("/delete_service")
+@contract({"service_name": (0, str), "password": (0, str), "username": (0, str)})
+async def delete_service(request):
+    username = request.json["username"]
+    password = request.json["password"]
+    service_name = request.json["service_name"]
+
+    if not validate_password(username, password):
+        return sanic_json({"status": "ERR", "message": "Wrong username or password"})
+
+    pathname = f"{username}.{service_name}"
+    user_b = username.encode()
+    path_b = pathname.encode()
+
+    if not Services.service_exists(pathname):
+        return sanic_json({"status": "ERR", "message": "Service doesn't exist"})
+
+    try:
+        mmr.delete_service(pathname)
+    except Exception:
+        pass
+
+    if path_b in stored_tokens:
+        del stored_tokens[path_b]
+    if path_b in hashed_tokens:
+        del hashed_tokens[path_b]
+
+    if pathname in cached_services:
+        del cached_services[pathname]
+
+    if user_b in stored_user_services:
+        current = stored_user_services[user_b]
+        items = [x for x in current.split(b":") if x]
+        new_items = [x for x in items if x.decode() != service_name]
+        stored_user_services[user_b] = b":".join(new_items)
+
+    stored_tokens.flush_buffer()
+    hashed_tokens.flush_buffer()
+    stored_user_services.flush_buffer()
+    fuzzysearch.remove_result(pathname)
+
+    return sanic_json({"status": "OK", "message": f"Service {service_name} deleted"})
+
+
+@app.post("/get_root_hash")
+@contract({"service_name": (0, str)})
+async def get_root_hash(request):
+    name = request.json["service_name"]
+    if not Services.service_exists(name):
+        return sanic_json({"status": "ERR", "message": "Service doesnt exist", "global_root": ""})
+
+    byte = bytes(Services.get_service(name).get_global_root())
+   # print(Services.get_service(name).get_global_root().hex())
+    return sanic_json({"status": "OK", "global_root": byte.hex(), "message": ""})
+
 @app.post("/update_service")
-@contract({"username": (0, str),"password": (0, str), "service_name": (0, str), "metadata": (0, dict)})
+@contract({"username": (0, str), "password": (0, str), "service_name": (0, str), "metadata": (0, dict)})
 async def update_service(request):
-    #if not Services.try_login(request.json["service_name"], request.json["token"]):
-   #     return sanic_json({"status": "ERR", "message": "Invalid service"})
-    return sanic_json({"status": "OK" if Services.update(request.json["service_name"], request.json["metadata"]) else "ERR"})
+    if not Services.service_exists(request.json["username"] + "." + request.json["service_name"]):
+        return sanic_json({"status": "ERR", "message": "Service doesn't exist"})
+    if not validate_password(request.json["username"], request.json["password"]):
+        return sanic_json({"status": "ERR", "message": "Incorrect password"})
+    return sanic_json({"status": "OK" if Services.update(request.json["service_name"],
+                                                         request.json["username"],
+                                                         request.json["password"],
+                                                         request.json["metadata"]) else "ERR"})
 
-@app.get("/list_services")
-async def list_services(_):
-    result = []
-    for name in ["gg"]:
-        result.append({
-            "service_name": name,
-            "metadata": Services.get_metadata(name),
-        })
-    return sanic_json({"status": "OK", "services": result})
+cached_search_results = {}
 
-@app.get("/get_my_services")
+
+def clear_user_cache(username: str):
+    for key in list(cached_search_results.keys()):
+        if key[0] == username:
+            del cached_search_results[key]
+
+
+fuzzysearch.ensure_collection()
+@app.post("/list_services")
+@contract({"filter": (0, str), "page_id": (0, int), "num_results": (0, int), "username": (0, str)})
+async def list_services(request):
+    username = request.json["username"]
+    filter_text = request.json["filter"]
+    page_id = int(request.json["page_id"])
+    num_results = int(request.json["num_results"])
+
+    cache_key = (username, filter_text)
+    total = 0
+
+    if filter_text:
+        # fuzzy search with per-user cache
+        global cached_search_results
+        if cache_key not in cached_search_results:
+            results = fuzzysearch.find_results(filter_text) or []
+            cached_search_results[cache_key] = results
+        all_results = cached_search_results[cache_key]
+
+        # slice the cached results
+        start = page_id * num_results
+        end = start + num_results
+        page_docs = all_results[start:end]
+        total = len(all_results)
+
+    else:
+        # no caching when filter is empty — load/yield as we go
+        # only consume exactly one page worth to keep it to ONE network call
+        page_docs = []
+        total = fuzzysearch.total()
+        gen = fuzzysearch.iterate_all(from_page=page_id + 1, per_page=num_results)
+        for i, doc in enumerate(gen):
+            page_docs.append(doc)
+            if i + 1 >= num_results:
+                break
+
+    services = []
+    for d in page_docs:
+        try:
+            services.append({"service_name": d["body"]})
+        except Exception:
+            continue
+
+    return sanic_json({"status": "OK", "services": services, "total": total})
+
+
+
+@app.post("/get_my_services")
+@contract({"username": (0, str)})
 async def get_my_services(request):
-    result = []
-    for name in ["gg"]:
-        result.append({
-            "service_name": name,
-            "metadata": Services.get_metadata(name),
-        })
-    return sanic_json({"status": "OK", "services": result})
+    return sanic_json({"status": "OK", "services": Services.my_service_list(request.json["username"])})
 
 
 @app.post("/add_blob")
 @contract({"token": (0, str), "service_name": (0, str), "blob_hash": (16, str)})
 async def add_blob(request):
-    if not Services.try_login(request.json["service_name"], request.json["token"]):
+    if not Services.check_token(request.json["service_name"], request.json["token"]):
         return sanic_json({"status": "ERR", "message": "Invalid token"})
     merkle_service = get_service_obj(request.json["service_name"])
     merkle_service.add(bytes.fromhex(request.json["blob_hash"]))
     merkle_service.flush()
     return sanic_json({"status": "OK", "message": ""})
 
-@app.post("/update_token")
-@contract({"username": (0, str), "password": (0, str)})
-async def update_token(request):
-    # Returns newly generated token. Feed the requests any username/pass pair, assume it will work.
-    # I will implement this on backend later, act as it returns {"token" : ...}
-    return sanic_json({"status": "OK", "token": "fff", "message": ""})
 
 @app.post("/get_token")
 @contract({"service_name": (0, str), "username": (0, str), "password": (0, str)})
 async def get_token(request):
-    # Returns generated token. Feed the requests any username/pass pair, assume it will work.
-    # I will implement this on backend later, act as it returns {"token" : ...}
-    return sanic_json({"status": "OK", "token": "hihi", "message": ""})
+    return sanic_json({"status": "OK", "token": Services.gettoken(request.json["service_name"], request.json["username"],
+                                                                  request.json["password"]), "message": ""})
 
 @app.post("/user_login")
 @contract({"username": (0, str), "password": (0, str)})
 async def user_login(request):
-    # Login
+    if not validate_password(request.json["username"], request.json["password"]):
+        return sanic_json({"status": "ERR", "message": "Wrong username or password"})
     return sanic_json({"status": "OK", "message": ""})
 
+stored_user_passwords = interface.StoredDict(name=b"user_passwords", env=interface.global_env, cache_on_set=True)
+stored_user_services = interface.StoredDict(name=b"user_services", env=interface.global_env, cache_on_set=True)
 @app.post("/user_signup")
 @contract({"username": (0, str), "password": (0, str)})
 async def user_signup(request):
+    username = request.json["username"].encode()
+    password = request.json["password"]
+    if username in stored_user_passwords:
+        return sanic_json({"status": "ERR", "message": "Username occupied"})
+    stored_user_passwords[username] = hash_password(password).encode()
+    stored_user_passwords.flush_buffer()
+    stored_user_services[username] = b""
+    stored_user_services.flush_buffer()
     # Signup
     return sanic_json({"status": "OK", "message": ""})
+
+@app.route("/service/<service_name:str>")
+async def service_with_name(_, service_name: str):
+    return html(router.read("service_page"))
 
 @app.post("/check_blob")
 @contract({"service_name": (0, str), "blob_hash": (16, str)})
@@ -182,7 +384,17 @@ async def check_blob(request):
     bundle = get_service_obj(name).server_check(bytes.fromhex(request.json["blob_hash"]))
     return sanic_json({"status": "OK", "bundle": bundle, "message": ""})
 
-@app.get("/get_service_metadata")
+
+@app.post("/has_service")
+@contract({"service_name": (0, str)})
+async def has_service(request):
+    name = request.json["service_name"]
+    if not Services.service_exists(name):
+        return sanic_json({"status": "ERR", "message": "Service doesn't exist"})
+    return sanic_json({"status": "OK", "message": ""})
+
+
+@app.post("/get_service_metadata")
 @contract({"service_name": (0, str)})
 async def get_service_metadata(request):
     name = request.json["service_name"]
@@ -190,13 +402,7 @@ async def get_service_metadata(request):
         return sanic_json({"status": "ERR", "message": "Service doesn't exist"})
     return sanic_json({"status": "OK", "metadata": Services.get_metadata(name), "message": ""})
 
-@app.get("/get_service_token")
-@contract({"username": (0, str), "password": (0, str)})
-async def get_service_token(request):
-    pass
-    # Compare hashes of given password and password in the database,
-    # then decrypt the stored hash with the sent password.
-    return sanic_json({"status": "OK", "token": "sjsjsjs", "message": ""})
+
 
 
 @app.route("/")
@@ -211,8 +417,16 @@ async def dashboard(_): return html(router.read("dashboard"))
 @app.route("/login")
 async def login(_): return html(router.read("login"))
 
-from sanic.response import file
-from pathlib import Path
+@app.route("/trees")
+async def trees_page(_): return html(router.read("trees"))
+
+@app.route("/service")
+async def service(_):
+    return html(router.read("service_page"))
+
+@app.route("/services")
+async def services(_): return html(router.read("services"))
+
 @app.route("/<filepath:path>")
 async def serve_asset(_, filepath: str):
     path = Path(filepath)
@@ -223,6 +437,7 @@ async def serve_asset(_, filepath: str):
     ext = path.suffix.lstrip(".").lower()
     page = path.parts[0]
     asset = "/".join(path.parts[1:])
+    #print(asset)
 
     if ext == "css":
         return text(router.read(page, "css", asset), content_type="text/css")
