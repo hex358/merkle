@@ -19,7 +19,7 @@ import fuzzysearch
 
 # ----------------- constants -----------------
 _PBKDF2_ITERS = 100_000
-app = Sanic("test")
+app = Sanic("certum")
 cached_services: dict = {}
 
 # ----------------- utils -----------------
@@ -109,6 +109,7 @@ class Services:
         pathname = f"{username}.{who}"
         who_b = who.encode()
         user_b = username.encode()
+        if not user_b.encode() in stored_user_passwords: return []
 
         if pathname not in cached_services:
             cached_services[pathname] = mmr.MerkleService(pathname)
@@ -433,6 +434,9 @@ async def service(_):
 
 @app.route("/services")
 async def services(_): return html(router.read("services"))
+
+@app.route("/hexdb")
+async def hexdb_page(_): return html(router.read("hexdb_page"))
 
 @app.route("/<filepath:path>")
 async def serve_asset(_, filepath: str):

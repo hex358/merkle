@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HexDB - CertumTree</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="common/styles.css">
+  <style>
+    /* Comparison Table Styling */
+    .comparison-table {
+      width: 100%;
+      border: 2px solid #666;
+      border-radius: 6px;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-top: 1rem;
+      overflow: hidden;
+    }
+    .comparison-table th, .comparison-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #444;
+    }
+    .comparison-table th {
+      background: #222;
+      font-weight: bold;
+    }
+    .comparison-table tr:last-child td {
+      border-bottom: none;
+    }
+    /* Highlight HexDB column */
+    .comparison-table td:last-child,
+    .comparison-table th:last-child {
+      background-color: rgba(60, 60, 30, 0.5); /* soft yellow */
+      font-weight: bold;
+    }
+    pre.code-block {
+      background: #111;
+      color: #eee;
+      padding: 1rem;
+      border-radius: 6px;
+      font-family: "Roboto Mono", monospace;
+      font-size: 0.9rem;
+      overflow-x: auto;
+      margin-top: 1rem;
+      border: 1px solid #333;
+    }
+  </style>
+</head>
+<body>
+  <!-- Top Navigation -->
+  <header class="header">
+    <nav class="nav-container">
+      <div class="nav-brand">CertumTree</div>
+      <div class="rightHeader"></div>
+      <script src="common/right_header.js"></script>
+    </nav>
+  </header>
+
+  <div class="scroll-wrapper">
+    <main class="main-content">
+      <!-- Hero -->
+      <section class="hero-section">
+        <div class="container">
+          <canvas id="hero-bg"></canvas>
+          <h1 class="hero-title">HexDB</h1>
+          <p class="hero-description">
+            HexDB is a custom-built, high-performance embedded database engine at the heart of CertumTree.
+            It is designed for constant-length cryptographic workloads, delivering <b>millions of operations per second</b> with minimal latency.
+          </p>
+        </div>
+      </section>
+
+      <!-- Content -->
+      <section class="services-section" id="hexdb-info">
+        <div class="container">
+          <h2 class="section-title">Why HexDB?</h2>
+          <p class="service-description">
+            Conventional databases (like RocksDB or Redis) struggle with append-only, constant-length records at the scale CertumTree requires.
+            HexDB was created to solve this. It is derived from <b>LMDB</b> but heavily optimized with:
+          </p>
+          <ul class="service-description">
+            <li> Constant-length batching for hash storage</li>
+            <li> Memory-mapped optimizations using MDB_RESERVE</li>
+            <li> C++ pybind11 extensions for tight Python integration</li>
+            <li> Thread-safe reading</li>
+            <li> Proven suitability for <b>relational structures through references</b></li>
+            <li> Excellent fit for <b>real-time apps with transactions or high message volume</b></li>
+            <li> <b>Batching with .flush_buffer()</b> for massive throughput</li>
+            <li> Designed to be <b>easy to use</b>, with simple yet powerful Python APIs</li>
+          </ul>
+
+          <pre class="code-block">from hexdb import StoredList, StoredDict, StoredReference, encode_val
+
+# Create a persistent list of hashes inside HexDB
+hashes = StoredList("verification_hashes")
+
+hashes.append(b"hash_of_message_1")
+hashes.append(b"hash_of_message_2")
+hashes.append(b"hash_of_document_3")
+
+# Retrieve a hash by index (constant time)
+print("First hash:", hashes[0])
+
+# Verify number of entries stored
+print("Total records:", len(hashes))
+
+user_profiles = StoredDict("profiles")
+
+# Insert key-value pairs
+user_profiles["alice"] = encode_val(StoredReference(hashes))
+user_profiles["bob"] = b"Bob's data"
+
+# Access values directly by key
+print("Alice profile:", user_profiles["alice"])
+
+# Iterate through keys (lightweight and efficient)
+for username in user_profiles.iterate(): pass</pre>
+
+          <br>
+          <h2 class="section-title">Benchmarks</h2>
+          <p class="service-description">
+            On a standard Intel i7 (Windows 11), HexDB achieves:
+          </p>
+          <ul class="service-description">
+            <li>⚡ <b>100M inserts/second</b> for hash appends</li>
+            <li>⚡ <b>200M adds/second</b> for constant-length lists</li>
+            <li>⚡ Near-zero overhead retrieval for verification proofs</li>
+          </ul>
+          <p class="service-description">
+            Even higher throughput is expected on Linux due to kernel-level optimizations.
+          </p>
+
+
+
+          <br>
+          <h2 class="section-title">Comparison with Popular Solutions</h2>
+          <p class="service-description">
+            HexDB is purpose-built for constant-length, append-only cryptographic workloads. While general-purpose databases
+            like <b>Redis</b>, <b>RocksDB</b>, and <b>LMDB</b> are widely used, they are not optimized for this specialized case:
+          </p>
+          <table class="comparison-table service-description">
+            <thead>
+              <tr>
+                <th align="left">Feature</th>
+                <th align="left">Redis</th>
+                <th align="left">RocksDB</th>
+                <th align="left">LMDB</th>
+                <th align="left">HexDB</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Primary Use Case</td>
+                <td>In-memory key-value store, caching</td>
+                <td>General-purpose persistent store</td>
+                <td>Embedded B+tree, transactional</td>
+                <td>Cryptographic append-only workloads</td>
+              </tr>
+              <tr>
+                <td>Throughput</td>
+                <td>~1M ops/s typical</td>
+                <td>10M-20M ops/s (depends on workload)</td>
+                <td>10M-50M ops/s (varies by config)</td>
+                <td>100M inserts/s<br>200M adds/s</td>
+              </tr>
+              <tr>
+                <td>Data Size Handling</td>
+                <td>Variable-length values</td>
+                <td>Variable-length values</td>
+                <td>Variable-length values</td>
+                <td>Constant-length records only</td>
+              </tr>
+              <tr>
+                <td>Memory Management</td>
+                <td>RAM-focused</td>
+                <td>Write-ahead log + compaction</td>
+                <td>Memory-mapped I/O</td>
+                <td>Memory-mapped with MDB_RESERVE optimizations</td>
+              </tr>
+              <tr>
+                <td>Integration</td>
+                <td>Network service (client/server)</td>
+                <td>Library, many bindings</td>
+                <td>C API, bindings exist</td>
+                <td>Easy-to-install Python module</td>
+              </tr>
+              <tr>
+                <td>Best For</td>
+                <td>Caching, queues, ephemeral data</td>
+                <td>Large-scale key-value persistence</td>
+                <td>General-purpose key-value storage</td>
+                <td>Cryptographic proofs, verifiable logs</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="service-description" style="margin-top: 1rem;">
+            Benchmarks were performed on an <b>Intel i7, Windows 11</b> environment. Even higher performance is
+            expected on Linux due to kernel-level optimizations.
+          </p>
+
+          <br>
+          <h2 class="section-title">Role in CertumTree</h2>
+          <p class="service-description">
+            HexDB powers CertumTree’s <b>Merkle Mountain Range</b>, storing every hash in an append-only structure.
+            Thanks to HexDB, CertumTree can scale from small developer apps to <b>tens of thousands of services</b> and
+            <b>millions of verification requests</b> without bottlenecks.
+          </p>
+          <p class="service-description">
+            Its open-source nature (MIT license) makes HexDB not only a database for CertumTree, but also a standalone
+            building block for other projects needing fast, immutable, and cryptographically strong storage.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="container">
+        <p class="footer-text">&copy; 2025 CertumTree. MIT license</p>
+      </div>
+    </footer>
+  </div>
+  <div id="scroll-spacer"></div>
+
+  <script src="common/utils.js"></script>
+  <script src="index/smoothscroll.js"></script>
+<script src="index/background.js"></script>
+</body>
+</html>
