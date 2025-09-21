@@ -2,6 +2,8 @@
 import os, json, base64, hashlib, secrets, traceback
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from functools import wraps
+import aiohttp
+import asyncio
 
 from sanic import Sanic, html, text
 from sanic import json as sanic_json
@@ -11,16 +13,19 @@ from sanic.response import file
 from pathlib import Path
 #from authlib.integrations.httpx_client import AsyncOAuth2Client
 
-# project modules
-import web.app_router as router
-import database.interface as interface
-import mmr
-import fuzzysearch
-
 # ----------------- constants -----------------
 _PBKDF2_ITERS = 100_000
 app = Sanic("certum")
 cached_services: dict = {}
+
+# project modules
+import web.app_router as router
+import database.interface as interface
+import mmr
+
+
+import fuzzysearch
+fuzzysearch.ensure_collection()
 
 # ----------------- utils -----------------
 def hash_password(password: str) -> str:
@@ -291,7 +296,6 @@ async def add_no_cache_headers(request, response):
 
 
 
-fuzzysearch.ensure_collection()
 @app.post("/list_services")
 async def list_services(request):
     username = request.json["username"]

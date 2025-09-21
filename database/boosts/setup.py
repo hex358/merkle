@@ -10,9 +10,6 @@ ext_modules = [
             cxx_std=20,
         include_dirs=[get_include(), r"D:merkle\merkleproof\.venv\py\main\nyada-db\boosts\bitsery\include"],
         #language="c++"
-        extra_compile_args=[
-            "/O2",
-        ],
     ),
 ]
 

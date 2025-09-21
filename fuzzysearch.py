@@ -1,8 +1,13 @@
 import typesense
+import os
+
+TYPESENSE_HOST = os.getenv("TYPESENSE_HOST", "localhost")  # default = localhost
+TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "8108")
+TYPESENSE_API_KEY = os.getenv("TYPESENSE_API_KEY", "xyz")
 
 client = typesense.Client({
-    "nodes": [{"host": "localhost", "port": "8108", "protocol": "http"}],
-    "api_key": "xyz",
+    "nodes": [{"host": TYPESENSE_HOST, "port": TYPESENSE_PORT, "protocol": "http"}],
+    "api_key": TYPESENSE_API_KEY,
     "connection_timeout_seconds": 2
 })
 
