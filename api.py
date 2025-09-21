@@ -109,7 +109,7 @@ class Services:
         pathname = f"{username}.{who}"
         who_b = who.encode()
         user_b = username.encode()
-        if not user_b.encode() in stored_user_passwords: return []
+        if not user_b in stored_user_passwords: return []
 
         if pathname not in cached_services:
             cached_services[pathname] = mmr.MerkleService(pathname)
@@ -283,10 +283,16 @@ def clear_user_cache(username: str):
         if key[0] == username:
             del cached_search_results[key]
 
+@app.middleware("response")
+async def add_no_cache_headers(request, response):
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+
+
 
 fuzzysearch.ensure_collection()
 @app.post("/list_services")
-@contract({"filter": (0, str), "page_id": (0, str), "num_results": (0, str), "username": (0, str)})
 async def list_services(request):
     username = request.json["username"]
     filter_text = request.json["filter"]
@@ -297,22 +303,18 @@ async def list_services(request):
     total = 0
 
     if filter_text:
-        # fuzzy search with per-user cache
         global cached_search_results
         if cache_key not in cached_search_results:
             results = fuzzysearch.search_all_parallel(filter_text, 3, 250, 4) or []
             cached_search_results[cache_key] = results
         all_results = cached_search_results[cache_key]
 
-        # slice the cached results
-        start = (page_id-1) * num_results
+        start = (page_id - 1) * num_results
         end = start + num_results
         page_docs = all_results[start:end]
         total = len(all_results)
 
     else:
-        # no caching when filter is empty — load/yield as we go
-        # only consume exactly one page worth to keep it to ONE network call
         page_docs = []
         total = fuzzysearch.total()
         gen = fuzzysearch.iterate_all(from_page=page_id, per_page=num_results)
@@ -320,6 +322,7 @@ async def list_services(request):
             page_docs.append(doc)
             if i + 1 >= num_results:
                 break
+
     services = []
     for d in page_docs:
         try:
@@ -327,7 +330,17 @@ async def list_services(request):
         except Exception:
             continue
 
-    return sanic_json({"status": "OK", "services": services, "total": total, "has_more": len(services) < total, "next_page_id": page_id+1})
+    start = (page_id - 1) * num_results
+    end = start + len(services)
+    has_more = end < total
+
+    return sanic_json({
+        "status": "OK",
+        "services": services,
+        "total": total,
+        "has_more": has_more,
+        "next_page_id": page_id + 1 if has_more else None
+    })
 
 
 

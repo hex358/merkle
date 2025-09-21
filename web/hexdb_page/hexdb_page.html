@@ -47,6 +47,26 @@
       margin-top: 1rem;
       border: 1px solid #333;
     }
+    /* Make the first (Feature) column wider */
+.comparison-table th:first-child,
+.comparison-table td:first-child {
+  width: 20%;       /* adjust percentage as needed */
+  min-width: 50px; /* optional: ensure a minimum */
+}
+
+    .section-title {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  text-align: center;
+  margin-bottom: 1rem;
+  margin-top: 0;
+}
+.footer {
+
+  margin-top: 0;
+}
+
   </style>
 </head>
 <body>
@@ -74,7 +94,7 @@
       </section>
 
       <!-- Content -->
-      <section class="services-section" id="hexdb-info">
+      <section class="offerings-section" id="hexdb-info">
         <div class="container">
           <h2 class="section-title">Why HexDB?</h2>
           <p class="service-description">
@@ -82,14 +102,14 @@
             HexDB was created to solve this. It is derived from <b>LMDB</b> but heavily optimized with:
           </p>
           <ul class="service-description">
-            <li> Constant-length batching for hash storage</li>
-            <li> Memory-mapped optimizations using MDB_RESERVE</li>
-            <li> C++ pybind11 extensions for tight Python integration</li>
-            <li> Thread-safe reading</li>
-            <li> Proven suitability for <b>relational structures through references</b></li>
-            <li> Excellent fit for <b>real-time apps with transactions or high message volume</b></li>
-            <li> <b>Batching with .flush_buffer()</b> for massive throughput</li>
-            <li> Designed to be <b>easy to use</b>, with simple yet powerful Python APIs</li>
+            <li>⚡ Constant-length batching for hash storage</li>
+            <li>⚡ Memory-mapped optimizations using MDB_RESERVE</li>
+            <li>⚡ C++ pybind11 extensions for tight Python integration</li>
+            <li>⚡ Thread-safe reading</li>
+            <li>⚡ Proven suitability for <b>relational structures through references</b></li>
+            <li>⚡ Excellent fit for <b>real-time apps with transactions or high message volume</b></li>
+            <li>⚡ <b>Batching with .flush_buffer()</b> for massive throughput</li>
+            <li>⚡ Designed to be <b>easy to use</b>, with simple yet powerful Python APIs</li>
           </ul>
 
           <pre class="code-block">from hexdb import StoredList, StoredDict, StoredReference, encode_val
@@ -125,9 +145,8 @@ for username in user_profiles.iterate(): pass</pre>
             On a standard Intel i7 (Windows 11), HexDB achieves:
           </p>
           <ul class="service-description">
-            <li>⚡ <b>100M inserts/second</b> for hash appends</li>
-            <li>⚡ <b>200M adds/second</b> for constant-length lists</li>
-            <li>⚡ Near-zero overhead retrieval for verification proofs</li>
+            <li>⚡ <b>180M adds/second</b> for constant-length value lists</li>
+            <li>⚡ <b>20M reads/second</b> for StoredDict and StoredList</li>
           </ul>
           <p class="service-description">
             Even higher throughput is expected on Linux due to kernel-level optimizations.
@@ -152,26 +171,20 @@ for username in user_profiles.iterate(): pass</pre>
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td>Primary Use Case</td>
-                <td>In-memory key-value store, caching</td>
-                <td>General-purpose persistent store</td>
-                <td>Embedded B+tree, transactional</td>
-                <td>Cryptographic append-only workloads</td>
-              </tr>
+
               <tr>
                 <td>Throughput</td>
-                <td>~1M ops/s typical</td>
+                <td>~1M ops/s on PCs, 100M adds/s on powerful clusters</td>
                 <td>10M-20M ops/s (depends on workload)</td>
                 <td>10M-50M ops/s (varies by config)</td>
-                <td>100M inserts/s<br>200M adds/s</td>
+                <td>180M adds/s<br>20M gets/s</td>
               </tr>
               <tr>
                 <td>Data Size Handling</td>
                 <td>Variable-length values</td>
                 <td>Variable-length values</td>
                 <td>Variable-length values</td>
-                <td>Constant-length records only</td>
+                <td>Different modes for variable- and constant-length values</td>
               </tr>
               <tr>
                 <td>Memory Management</td>
@@ -192,7 +205,7 @@ for username in user_profiles.iterate(): pass</pre>
                 <td>Caching, queues, ephemeral data</td>
                 <td>Large-scale key-value persistence</td>
                 <td>General-purpose key-value storage</td>
-                <td>Cryptographic proofs, verifiable logs</td>
+                <td>Massive-scale high-entropy data (passwords, NN weights, etc), real-time apps with millions of transactions/s</td>
               </tr>
             </tbody>
           </table>
@@ -202,16 +215,7 @@ for username in user_profiles.iterate(): pass</pre>
           </p>
 
           <br>
-          <h2 class="section-title">Role in CertumTree</h2>
-          <p class="service-description">
-            HexDB powers CertumTree’s <b>Merkle Mountain Range</b>, storing every hash in an append-only structure.
-            Thanks to HexDB, CertumTree can scale from small developer apps to <b>tens of thousands of services</b> and
-            <b>millions of verification requests</b> without bottlenecks.
-          </p>
-          <p class="service-description">
-            Its open-source nature (MIT license) makes HexDB not only a database for CertumTree, but also a standalone
-            building block for other projects needing fast, immutable, and cryptographically strong storage.
-          </p>
+
         </div>
       </section>
     </main>

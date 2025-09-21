@@ -1,28 +1,26 @@
-import subprocess
+import typesense
 
-def run(cmd):
-    print(f"$ {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.stdout:
-        print(result.stdout.strip())
-    if result.stderr:
-        print(result.stderr.strip())
-    return result.returncode
+client = typesense.Client({
+    "nodes": [{"host": "localhost", "port": "8108", "protocol": "http"}],
+    "api_key": "xyz",
+    "connection_timeout_seconds": 2
+})
 
-def drop_typesense():
-    container_name = "typesense"
+collection = "docs"
 
-    # Stop container
-    run(["docker", "stop", container_name])
 
-    # Remove /data inside container (after restart)
-    run([
-        "docker", "run", "--rm",
-        "--volumes-from", container_name,
-        "busybox", "sh", "-c", "rm -rf /data/*"
-    ])
+def drop_collection():
+    try:
+        return client.collections[collection].delete()
+    except Exception as e:
+        return {"error": str(e)}
 
-    print("Typesense data dropped successfully.")
 
-if __name__ == "__main__":
-    drop_typesense()
+def clear_collection():
+    try:
+        return client.collections[collection].documents.delete({"filter_by": "*"})
+    except Exception as e:
+        return {"error": str(e)}
+
+
+drop_collection()

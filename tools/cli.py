@@ -69,11 +69,12 @@ def main():
         print(post("/user_login", {"username": args.username, "password": args.password}))
 
     elif args.cmd == "register":
-        print(post("/register_service", {
-            "username": args.username,
-            "password": args.password,
-            "service_name": args.service_name
-        }))
+        for i in range(500):
+            print(post("/register_service", {
+                "username": args.username,
+                "password": args.password,
+                "service_name": args.service_name + str(i) + "fff"
+            }))
 
     elif args.cmd == "delete":
         print(post("/delete_service", {

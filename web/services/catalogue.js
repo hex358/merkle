@@ -8,25 +8,29 @@ class ServiceList {
 		this.nextPageId = "1";
 		this.requestGen = 0;
 
-		this.loadScheduled = false; // coalesce triggers
-		this.rafId = null;          // throttle scroll/resize
-		this.lastPageUsed = null;   // monotonic guard
+		// Scroll-driven config
+		this.prefetchPx = 250;     // how close to bottom counts as "near"
+		this.prefillMax = 1;       // safety cap for initial prefill
+		this.prefillCount = 0;
+		this.initialPrefillActive = true; // prefill until scrollbar appears
+		this.canTrigger = false;   // hysteresis gate
+
+		this.loadScheduled = false;
+		this.rafId = null;
+		this.lastPageUsed = null;
 
 		this.initializeElements();
 		this.setupEventListeners();
-		this.setupInfiniteObserver();
 
-		// kick off initial batch via scheduler (not direct) to avoid re-entrancy
-		this.scheduleLoad();
+		// Initial page
+		this.scheduleLoad(true);
 	}
 
 	getScrollParent(el) {
 		let p = el?.parentElement;
 		while (p) {
 			const s = getComputedStyle(p);
-			if (/(auto|scroll|overlay)/.test(s.overflowY + s.overflowX + s.overflow)) {
-				return p;
-			}
+			if (/(auto|scroll|overlay)/.test(s.overflowY + s.overflowX + s.overflow)) return p;
 			p = p.parentElement;
 		}
 		return null;
@@ -39,70 +43,114 @@ class ServiceList {
 		this.noResults = document.getElementById('noResults');
 		this.resultsInfo = document.getElementById('resultsInfo');
 
+		// Anchor to insert before; not used for visibility anymore
 		this.sentinel = document.createElement('div');
 		this.sentinel.id = 'infinite-sentinel';
 		this.sentinel.style.height = '1px';
 		this.sentinel.style.width = '100%';
 		this.servicesGrid.appendChild(this.sentinel);
 
+		// Choose a scroll root if a container scrolls; otherwise fall back later.
 		this.scrollRoot = this.getScrollParent(this.servicesGrid);
+	}
 
+	setupEventListeners() {
+		// --- unified throttled checker ---
 		const onPassiveCheck = () => {
 			if (this.rafId) return;
 			this.rafId = requestAnimationFrame(() => {
 				this.rafId = null;
-				this.scheduleLoad();
+				this.onScrollLikeEvent();
 			});
 		};
-		(this.scrollRoot || window).addEventListener('scroll', onPassiveCheck, { passive: true });
+		this._onPassiveCheck = onPassiveCheck; // keep for potential cleanup
+
+		// --- attach to ALL plausible scroll sources ---
+		// 1) Explicit scroll container, if found
+		if (this.scrollRoot) {
+			this.scrollRoot.addEventListener('scroll', onPassiveCheck, { passive: true });
+		}
+		// 2) Window (covers typical document scrolling)
+		window.addEventListener('scroll', onPassiveCheck, { passive: true });
+		// 3) Document-level fallback (some engines fire here more consistently)
+		document.addEventListener('scroll', onPassiveCheck, { passive: true });
+
+		// --- other user-driven motion that may not emit 'scroll' on some targets ---
+		window.addEventListener('wheel', onPassiveCheck, { passive: true });
+		window.addEventListener('touchmove', onPassiveCheck, { passive: true });
+
+		// Keyboard navigation (PgDn, Space, arrows, End/Home)
+		window.addEventListener('keydown', (e) => {
+			const keys = ['PageDown','PageUp','End','Home','ArrowDown','ArrowUp',' '];
+			if (keys.includes(e.key)) onPassiveCheck();
+		}, { passive: true });
+
+		// Resize should retrigger near-bottom math
 		window.addEventListener('resize', onPassiveCheck, { passive: true });
 
-		this.resizeObs = new ResizeObserver(() => this.scheduleLoad());
-		this.resizeObs.observe(this.servicesGrid);
-	}
+		// Content changes (cards appended) can change scrollHeight without a scroll event
+		this._mo = new MutationObserver(() => onPassiveCheck());
+		this._mo.observe(this.servicesGrid, { childList: true, subtree: false });
 
-	setupEventListeners() {
+		// Post-layout kick: ensure at least one check after first paint
+		setTimeout(() => onPassiveCheck(), 0);
+		requestAnimationFrame(() => onPassiveCheck());
+
+		// Search debounce
 		let t = null;
-		this.searchInput.addEventListener('input', (e) => {
+		this.searchInput?.addEventListener('input', (e) => {
 			clearTimeout(t);
 			t = setTimeout(() => this.handleSearch(e.target.value), 300);
 		});
 	}
 
-	setupInfiniteObserver() {
-		if (this.io) this.io.disconnect();
-		this.io = new IntersectionObserver((entries) => {
-			for (const entry of entries) {
-				if (entry.isIntersecting) this.scheduleLoad();
-			}
-		}, {
-			root: this.scrollRoot || null,
-			rootMargin: '800px 0px 800px 0px',
-			threshold: 0
-		});
-		this.io.observe(this.sentinel);
+	// ===== Scroll math =====
+	getScrollMetrics() {
+		// Prefer the real scrolling element if window is the scroller
+		const scrollingEl = document.scrollingElement || document.documentElement;
+
+		if (this.scrollRoot) {
+			return {
+				scrollTop: this.scrollRoot.scrollTop,
+				clientHeight: this.scrollRoot.clientHeight,
+				scrollHeight: this.scrollRoot.scrollHeight
+			};
+		}
+		return {
+			scrollTop: window.scrollY ?? scrollingEl.scrollTop ?? 0,
+			clientHeight: window.innerHeight ?? scrollingEl.clientHeight,
+			scrollHeight: scrollingEl.scrollHeight
+		};
 	}
 
-	isSentinelVisible() {
-		const rootEl = this.scrollRoot;
-		const rect = this.sentinel.getBoundingClientRect();
-		const vh = (rootEl ? rootEl.clientHeight : window.innerHeight) || 0;
-		return rect.top < vh + 800 && rect.bottom > -800;
+	isViewportFilled() {
+		const { clientHeight, scrollHeight } = this.getScrollMetrics();
+		return scrollHeight > clientHeight + 1;
 	}
 
-	scheduleLoad() {
-		if (this.loadScheduled || this.isLoading || !this.hasMore) return;
-		if (!this.isSentinelVisible()) return;
-		this.loadScheduled = true;
-		queueMicrotask(async () => {
-			this.loadScheduled = false;
-			// re-check conditions right before loading
-			if (!this.isLoading && this.hasMore && this.isSentinelVisible()) {
-				await this.loadServices();
-			}
-		});
+isNearBottom() {
+	const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+	const clientHeight = window.innerHeight;
+	const scrollHeight = document.documentElement.scrollHeight;
+
+	return (scrollHeight - (scrollTop + clientHeight)) <= this.prefetchPx;
+}
+
+
+	onScrollLikeEvent() {
+		// Hysteresis: re-arm when user is NOT near bottom
+		if (!this.isNearBottom()) {
+			this.canTrigger = true;
+			return;
+		}
+		// If near bottom: allow load only if armed or during initial prefill
+		if (this.canTrigger || this.initialPrefillActive) {
+			this.canTrigger = false; // disarm until they scroll away again
+			this.scheduleLoad(false);
+		}
 	}
 
+	// ===== Lifecycle =====
 	resetPagination() {
 		this.hasMore = true;
 		this.services = [];
@@ -111,14 +159,19 @@ class ServiceList {
 		this.nextPageId = "1";
 		this.lastPageUsed = null;
 
+		this.prefillCount = 0;
+		this.initialPrefillActive = true;
+		this.canTrigger = false;
+
 		this.sentinel = document.createElement('div');
 		this.sentinel.id = 'infinite-sentinel';
 		this.sentinel.style.height = '1px';
 		this.sentinel.style.width = '100%';
 		this.servicesGrid.appendChild(this.sentinel);
 
-		this.setupInfiniteObserver();
-		this.scheduleLoad();
+		this.scheduleLoad(true);
+		// After resetting, force a check once DOM mutates
+		queueMicrotask(() => this.onScrollLikeEvent());
 	}
 
 	async handleSearch(query) {
@@ -138,13 +191,27 @@ class ServiceList {
 		return { nextPageId, hasMore, total };
 	}
 
+	scheduleLoad(force = false) {
+		if (this.loadScheduled || this.isLoading || !this.hasMore) return;
+
+		if (!force && !this.isNearBottom()) return;
+
+		this.loadScheduled = true;
+		queueMicrotask(async () => {
+			this.loadScheduled = false;
+			if (this.isLoading || !this.hasMore) return;
+			if (force || this.isNearBottom()) {
+				await this.loadServices();
+			}
+		});
+	}
+
 	async loadServices() {
 		if (this.isLoading || !this.hasMore) return;
 		this.isLoading = true;
 		this.showLoading(true);
 		const gen = ++this.requestGen;
 
-		// remember which page we actually used
 		const pageUsed = String(this.nextPageId || "1");
 		this.lastPageUsed = pageUsed;
 
@@ -156,7 +223,7 @@ class ServiceList {
 				username: ""
 			};
 			const response = await apiPost('list_services', payload);
-			if (gen !== this.requestGen) return; // stale response
+			if (gen !== this.requestGen) return; // stale
 
 			const batch = Array.isArray(response?.services) ? response.services : [];
 			this.renderServices(batch);
@@ -164,7 +231,6 @@ class ServiceList {
 
 			const norm = this._normalizeResponse(response, batch.length);
 
-			// Decide next page ID (monotonic, no-spin)
 			let newNext = null;
 			if (norm.nextPageId != null) {
 				newNext = String(norm.nextPageId);
@@ -173,12 +239,11 @@ class ServiceList {
 				newNext = Number.isFinite(n) ? String(n + 1) : null;
 			}
 
-			// If server didn't advance page and we got nothing, stop.
-			if (newNext === pageUsed && batch.length === 0) {
+			if ((newNext === pageUsed || newNext == null) && batch.length === 0) {
 				this.hasMore = false;
 			} else {
-				this.nextPageId = newNext ?? pageUsed; // fallback to used page if parsing failed
-				this.hasMore = !!norm.hasMore && batch.length >= 0; // norm.hasMore already accounts for per_page
+				this.nextPageId = newNext ?? pageUsed;
+				this.hasMore = !!norm.hasMore && batch.length > 0;
 			}
 
 			this.updateResultsInfo({ total: norm.total });
@@ -191,8 +256,23 @@ class ServiceList {
 			this.isLoading = false;
 			this.showLoading(false);
 
-			// If viewport still not filled and there's more, schedule another (coalesced).
-			if (this.hasMore) this.scheduleLoad();
+			// INITIAL PREFILL: continue until scrollbar appears (with cap)
+			if (this.hasMore && this.initialPrefillActive && !this.isViewportFilled()) {
+				if (this.prefillCount < this.prefillMax) {
+					this.prefillCount += 1;
+					this.scheduleLoad(true);
+					return;
+				}
+			}
+
+			// Once viewport is filled OR we hit the cap, end initial prefill phase
+			if (this.isViewportFilled() || this.prefillCount >= this.prefillMax) {
+				this.initialPrefillActive = false;
+				if (!this.isNearBottom()) this.canTrigger = true;
+			}
+
+			// Ensure a re-check after DOM has settled (covers rare no-scroll-event cases)
+			queueMicrotask(() => this.onScrollLikeEvent());
 		}
 	}
 
@@ -200,28 +280,24 @@ class ServiceList {
 		for (const service of batch) {
 			this.servicesGrid.insertBefore(this.createServiceCard(service), this.sentinel);
 		}
-		// keep sentinel last (no-op if already last)
 		this.servicesGrid.appendChild(this.sentinel);
 	}
 
 	createServiceCard(service) {
 		const card = document.createElement('div');
 		card.className = 'service-card';
-		console.log(service);
-		const service_name = service.service_name.replace("_", ".");
-		const org = service_name.split(".")[0];
-		const name = service_name.split(".")[1];
+		const service_name = (service.service_name || '').replace("_", ".");
+		const [org, name] = service_name.split(".");
 		card.innerHTML = `
 			<div class="service-name">
-				<dark>${org}</dark>.${name}
+				<dark>${org ?? ''}</dark>.${name ?? ''}
 			</div>`;
 		card.addEventListener('click', () => this.handleServiceClick(service_name));
 		return card;
 	}
 
 	handleServiceClick(service) {
-	console.log("fkfk");
-		window.location.href = BACKEND_URL + "/service/"+service;
+		window.location.href = BACKEND_URL + "/service/" + service;
 	}
 
 	updateResultsInfo(resp = null, errorMessage = null) {

@@ -364,3 +364,12 @@ body {
 }
 
 #servicesGrid { overflow-anchor: none; }
+
+.service-name,
+.service-description {
+  white-space: normal;       /* allow line breaks */
+  overflow-wrap: anywhere;   /* let browser wrap at natural breakpoints */
+  word-break: keep-all;      /* don't break inside words */
+}
+
+
